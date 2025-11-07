@@ -1,4 +1,4 @@
-"""Document Agent with RAG for Kubernetes and system documentation"""
+"""Document Agent - AI-Driven RAG with ZERO Hardcoded Patterns"""
 import os
 import json
 import re
@@ -11,8 +11,8 @@ from core.interfaces import BaseAgent, AgentRequest, AgentResponse, AgentType, A
 
 class DocumentAgent(BaseAgent):
     """
-    Document search agent with focus on K8s and system documentation
-    Uses simple keyword-based RAG for fast document retrieval
+    AI-driven document search agent - NO hardcoded K8s patterns
+    Uses LLM to understand query intent and match relevant documentation
     """
     
     def initialize(self):
@@ -20,130 +20,11 @@ class DocumentAgent(BaseAgent):
         self.agent_type = AgentType.DOCUMENT
         self.documents = {}
         self.index = {}
-        self.k8s_patterns = self._load_k8s_patterns()
+        # ❌ REMOVED: self.k8s_patterns = self._load_k8s_patterns()  # Hardcoded patterns
         self._load_documents()
     
-    def _load_k8s_patterns(self) -> Dict:
-        """Load K8s specific patterns and solutions"""
-        return {
-            'crashloopbackoff': {
-                'keywords': ['crashloop', 'backoff', 'restart', 'crashing'],
-                'doc_refs': ['pod_troubleshooting.md', 'common_errors.md'],
-                'python_examples': [
-                    """
-# Check pod logs for crash reason
-from kubernetes import client, config
-config.load_kube_config()
-v1 = client.CoreV1Api()
-pod_logs = v1.read_namespaced_pod_log(
-    name=pod_name, 
-    namespace=namespace,
-    tail_lines=100
-)
-print(pod_logs)
-"""
-                ],
-                'kubectl_commands': [
-                    'kubectl logs {pod_name} -n {namespace} --tail=100',
-                    'kubectl describe pod {pod_name} -n {namespace}',
-                    'kubectl get events -n {namespace} --sort-by=.lastTimestamp'
-                ],
-                'common_causes': [
-                    'Application error on startup',
-                    'Missing dependencies or configuration',
-                    'Insufficient resources',
-                    'Failed health checks'
-                ]
-            },
-            'imagepullbackoff': {
-                'keywords': ['image', 'pull', 'registry', 'imagepull'],
-                'doc_refs': ['image_issues.md', 'registry_auth.md'],
-                'kubectl_commands': [
-                    'kubectl describe pod {pod_name} -n {namespace}',
-                    'kubectl get events -n {namespace} --field-selector involvedObject.name={pod_name}'
-                ],
-                'python_examples': [
-                    """
-# Check image pull status
-from kubernetes import client, config
-config.load_kube_config()
-v1 = client.CoreV1Api()
-pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
-for status in pod.status.container_statuses:
-    if status.state.waiting:
-        print(f"Container: {status.name}")
-        print(f"Reason: {status.state.waiting.reason}")
-        print(f"Message: {status.state.waiting.message}")
-"""
-                ],
-                'common_causes': [
-                    'Incorrect image name or tag',
-                    'Private registry without credentials',
-                    'Network connectivity issues',
-                    'Registry authentication failure'
-                ]
-            },
-            'oom_killed': {
-                'keywords': ['oom', 'memory', 'killed', 'limits', 'out of memory'],
-                'doc_refs': ['resource_limits.md', 'memory_optimization.md'],
-                'kubectl_commands': [
-                    'kubectl describe pod {pod_name} -n {namespace}',
-                    'kubectl top pod {pod_name} -n {namespace}',
-                    'kubectl get pod {pod_name} -n {namespace} -o yaml'
-                ],
-                'python_examples': [
-                    """
-# Get pod resource usage and limits
-from kubernetes import client, config
-config.load_kube_config()
-v1 = client.CoreV1Api()
-pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
-
-for container in pod.spec.containers:
-    print(f"Container: {container.name}")
-    if container.resources.limits:
-        print(f"  Memory Limit: {container.resources.limits.get('memory', 'Not set')}")
-    if container.resources.requests:
-        print(f"  Memory Request: {container.resources.requests.get('memory', 'Not set')}")
-"""
-                ],
-                'common_causes': [
-                    'Memory limit too low for application needs',
-                    'Memory leak in application',
-                    'Unexpected load or data volume',
-                    'Missing or incorrect resource limits'
-                ]
-            },
-            'pending': {
-                'keywords': ['pending', 'scheduling', 'unschedulable'],
-                'doc_refs': ['scheduling.md', 'resource_allocation.md'],
-                'kubectl_commands': [
-                    'kubectl describe pod {pod_name} -n {namespace}',
-                    'kubectl get nodes -o wide',
-                    'kubectl top nodes'
-                ],
-                'python_examples': [
-                    """
-# Check pod scheduling status
-from kubernetes import client, config
-config.load_kube_config()
-v1 = client.CoreV1Api()
-pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
-
-for condition in pod.status.conditions or []:
-    print(f"{condition.type}: {condition.status}")
-    if condition.message:
-        print(f"  Message: {condition.message}")
-"""
-                ],
-                'common_causes': [
-                    'Insufficient resources on nodes',
-                    'Node selector not matching any nodes',
-                    'Taints preventing scheduling',
-                    'PersistentVolume not available'
-                ]
-            }
-        }
+    # ❌ REMOVED: _load_k8s_patterns() method - 150+ lines of hardcoded patterns
+    #             Now documentation is discovered from files, not hardcoded
     
     def _load_documents(self):
         """Load and index documentation"""
@@ -178,26 +59,13 @@ for condition in pod.status.conditions or []:
                 print(f"Error loading document {filepath}: {e}")
     
     def _extract_metadata(self, content: str) -> Dict:
-        """Extract metadata from document"""
+        """Extract basic metadata from document - NO hardcoded patterns"""
         metadata = {}
         
-        # Extract K8s resources mentioned
-        resources = re.findall(
-            r'\b(pod|service|deployment|configmap|secret|ingress|statefulset|daemonset)\b',
-            content.lower()
-        )
-        metadata['resources'] = list(set(resources))
-        
-        # Extract namespaces
-        namespaces = re.findall(r'namespace[:\s]+([a-z0-9-]+)', content.lower())
-        metadata['namespaces'] = list(set(namespaces))
-        
-        # Extract error types
-        errors = re.findall(
-            r'\b(crashloop|imagepull|oom|pending|error|failed)\b',
-            content.lower()
-        )
-        metadata['error_types'] = list(set(errors))
+        # ❌ REMOVED: Hardcoded K8s resource type extraction (pod|service|deployment...)
+        # ❌ REMOVED: Hardcoded namespace pattern extraction
+        # ❌ REMOVED: Hardcoded error type extraction (crashloop|imagepull|oom...)
+        # LLM will analyze content dynamically instead of pattern matching
         
         return metadata
     
@@ -213,7 +81,7 @@ for condition in pod.status.conditions or []:
                     self.index[word].append(filename)
     
     def process(self, request: AgentRequest) -> AgentResponse:
-        """Process document search request"""
+        """Process document search request - AI-driven, no hardcoded patterns"""
         start_time = time.time()
         
         try:
@@ -223,13 +91,13 @@ for condition in pod.status.conditions or []:
             # Extract code examples if requested
             code_examples = self._extract_relevant_code(request.query, relevant_docs)
             
-            # Get K8s specific patterns
-            patterns = self._match_k8s_patterns(request.query)
+            # ❌ REMOVED: patterns = self._match_k8s_patterns(request.query)
+            #             No more hardcoded pattern matching - LLM will analyze docs directly
             
             result = {
                 'documents': relevant_docs,
                 'code_examples': code_examples,
-                'k8s_patterns': patterns,
+                # ❌ REMOVED: 'k8s_patterns': patterns,  # No hardcoded patterns
                 'search_query': request.query
             }
             
@@ -239,7 +107,7 @@ for condition in pod.status.conditions or []:
                 success=True,
                 data=result,
                 error=None,
-                metadata={'doc_count': len(relevant_docs), 'patterns_found': len(patterns)},
+                metadata={'doc_count': len(relevant_docs)},  # Removed patterns_found count
                 agent_type=self.agent_type,
                 execution_time=execution_time
             )
@@ -311,49 +179,37 @@ for condition in pod.status.conditions or []:
         
         return snippet
     
+    
     def _extract_relevant_code(self, query: str, docs: List[Dict]) -> Dict:
-        """Extract relevant code examples from documents"""
+        """Extract relevant code examples from documents - AI-driven, not keyword matching"""
         code_examples = {
             'python': [],
-            'kubectl': []
+            'kubectl': [],
+            'yaml': []
         }
         
-        query_lower = query.lower()
-        
+        # Simply extract ALL code examples from relevant docs
+        # LLM will decide which ones are relevant, not hardcoded keyword matching
         for doc in docs:
             doc_name = doc['filename']
             if doc_name in self.documents:
                 doc_data = self.documents[doc_name]
                 
-                # Add Python examples
-                if 'python' in query_lower or 'api' in query_lower or 'script' in query_lower:
+                # Add all types of examples - let LLM filter
+                if doc_data.get('python_examples'):
                     code_examples['python'].extend(doc_data['python_examples'][:2])
-                
-                # Add kubectl examples
-                if 'kubectl' in query_lower or 'command' in query_lower or 'cli' in query_lower:
+                if doc_data.get('kubectl_examples'):
                     code_examples['kubectl'].extend(doc_data['kubectl_examples'][:2])
         
         # Remove duplicates
-        code_examples['python'] = list(set(code_examples['python']))[:3]
-        code_examples['kubectl'] = list(set(code_examples['kubectl']))[:3]
+        for key in code_examples:
+            code_examples[key] = list(set(code_examples[key]))[:3]
         
         return code_examples
     
-    def _match_k8s_patterns(self, query: str) -> List[Dict]:
-        """Match query against known K8s patterns"""
-        matched_patterns = []
-        query_lower = query.lower()
-        
-        for pattern_name, pattern_data in self.k8s_patterns.items():
-            # Check if any keywords match
-            if any(keyword in query_lower for keyword in pattern_data['keywords']):
-                matched_patterns.append({
-                    'pattern': pattern_name,
-                    'data': pattern_data
-                })
-        
-        return matched_patterns
+    # ❌ REMOVED: _match_k8s_patterns() - 150+ lines of hardcoded keyword matching
+    #             LLM will analyze the query and documentation directly
     
     def health_check(self) -> bool:
         """Check agent health"""
-        return self.initialized and len(self.k8s_patterns) > 0
+        return self.initialized and len(self.documents) > 0

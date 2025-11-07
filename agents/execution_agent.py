@@ -101,58 +101,81 @@ class ExecutionAgent(BaseAgent):
     
     def _is_safe_command(self, command: str) -> bool:
         """
-        Enhanced security check with granular permissions.
-        Allows operations when explicitly permitted via config.
+        AI-driven security check - uses SecurityPolicyAgent instead of hardcoded lists.
+        Delegates to AI for intelligent safety evaluation.
+        """
+        # Use AI-driven security evaluation
+        try:
+            from agents.security_policy_agent import SecurityPolicyAgent
+            security_agent = SecurityPolicyAgent(self.config)
+            security_agent.initialize()
+            
+            # AI evaluates command safety
+            is_safe, reason, suggestion = security_agent.evaluate_command_safety(
+                command=command,
+                user_query=getattr(self, '_current_user_query', '')
+            )
+            
+            if not is_safe:
+                print(f"   ⚠️  {reason}")
+                if suggestion:
+                    print(f"   💡 Suggestion: {suggestion}")
+            
+            return is_safe
+            
+        except Exception as e:
+            print(f"   ⚠️  AI security check failed: {e}, using basic permission check")
+            return self._basic_permission_fallback(command)
+    
+    def _basic_permission_fallback(self, command: str) -> bool:
+        """
+        Basic fallback when AI unavailable - permission-based, not command lists.
         """
         command_lower = command.lower()
         
-        # Always block truly dangerous commands
+        # Check forbidden patterns from config
         for forbidden in self.forbidden_commands:
             if forbidden.lower() in command_lower:
                 return False
         
-        # Check for kubectl operations that need permissions
-        if 'kubectl delete' in command_lower or 'oc delete' in command_lower:
-            if not self.allow_delete:
-                print(f"   ⚠️  DELETE operation blocked (allow_delete=False)")
-                print(f"   💡 To enable: Set execution_agent.allow_delete: true in config")
-                return False
+        # Permission-based checks (not hardcoded operation lists)
+        if not self.allow_delete and 'delete' in command_lower:
+            print(f"   ⚠️  DELETE operation blocked (allow_delete=False)")
+            return False
         
-        if 'kubectl create' in command_lower or 'kubectl apply' in command_lower:
-            if not self.allow_create:
-                print(f"   ⚠️  CREATE operation blocked (allow_create=False)")
-                return False
+        if not self.allow_create and any(op in command_lower for op in ['create', 'apply']):
+            print(f"   ⚠️  CREATE operation blocked (allow_create=False)")
+            return False
         
-        if 'kubectl patch' in command_lower or 'kubectl edit' in command_lower or 'kubectl scale' in command_lower:
-            if not self.allow_update:
-                print(f"   ⚠️  UPDATE operation blocked (allow_update=False)")
-                return False
+        if not self.allow_update and any(op in command_lower for op in ['patch', 'edit', 'scale']):
+            print(f"   ⚠️  UPDATE operation blocked (allow_update=False)")
+            return False
         
-        # In read-only mode, only allow safe read operations
+        # In read-only, block writes (general check, not specific commands)
         if self.read_only_mode:
-            safe_read_ops = ['get', 'describe', 'logs', 'top', 'explain', 'api-resources', 'version']
-            if not any(f'kubectl {op}' in command_lower for op in safe_read_ops):
-                if not any(f'oc {op}' in command_lower for op in safe_read_ops):
-                    print(f"   ⚠️  Operation blocked in read-only mode")
-                    return False
+            write_indicators = ['delete', 'create', 'apply', 'patch', 'edit', 'scale', 'remove', 'destroy']
+            if any(indicator in command_lower for indicator in write_indicators):
+                print(f"   ⚠️  Write operation blocked in read-only mode")
+                return False
         
         return True
     
     def _determine_execution_mode(self, request: AgentRequest) -> str:
         """
-        Determine execution mode - simplified for AI-driven approach.
-        LLM decides commands, we just execute them.
+        Determine execution mode - AI-driven, minimal hardcoding.
         """
         # If AI has generated commands, use kubectl mode
         if 'ai_generated_commands' in request.context:
             return 'kubectl'
         
         # Check for explicit kubectl command
-        if 'kubectl' in request.query.lower():
+        if 'kubectl' in request.query.lower() or 'oc' in request.query.lower():
             return 'kubectl'
         
-        # Check for shell commands
-        if any(request.query.strip().startswith(cmd) for cmd in ['ls', 'pwd', 'whoami', 'date', 'df', 'free', 'uptime']):
+        # ❌ REMOVED: Hardcoded shell command list ['ls', 'pwd', 'whoami'...]
+        # Use shell mode only if explicitly shell-like (starts with common shell pattern)
+        query_stripped = request.query.strip()
+        if any(query_stripped.startswith(cmd) for cmd in ['ls', 'cat', 'echo', 'pwd', 'whoami', 'date']):
             return 'shell'
         
         # Default to kubectl for K8s queries - LLM will generate commands
@@ -206,19 +229,17 @@ class ExecutionAgent(BaseAgent):
         }
     
     def _execute_shell(self, request: AgentRequest) -> Dict:
-        """Execute shell commands (with safety restrictions)"""
-        # For demo, limit to safe commands
-        safe_commands = ['ls', 'pwd', 'whoami', 'date', 'df -h', 'free -m', 'uptime']
-        
+        """
+        Execute shell commands with AI-driven safety check.
+        No hardcoded safe command list - AI evaluates safety.
+        """
         command = request.query
         
-        # Check if it's a safe command
-        is_safe = any(command.strip().startswith(safe) for safe in safe_commands)
-        
-        if not is_safe:
+        # AI evaluates if shell command is safe
+        if not self._is_safe_command(command):
             return {
-                'error': 'Command not in safe list',
-                'safe_commands': safe_commands
+                'error': 'Command blocked by security policy',
+                'suggestion': 'Use AI-driven security evaluation'
             }
         
         return self._execute_local_command(command)

@@ -28,77 +28,49 @@ class LLMAgent(BaseAgent):
             'tags': f'{self.ollama_url}/api/tags'
         }
         
-        # Specialized prompts for K8s troubleshooting
+        # Initialize knowledge agent for dynamic learning
+        from agents.knowledge_agent import KnowledgeAgent
+        self.knowledge_agent = KnowledgeAgent(self.config)
+        self.knowledge_agent.initialize()
+        
+        # AI-driven prompts with ZERO hardcoded commands/patterns
         self.prompt_templates = {
-            'generate_commands': """You are a Kubernetes expert. Analyze the user's query and dynamically determine the EXACT kubectl commands needed.
+            'generate_commands': """You are a Kubernetes expert with deep understanding of cloud-native troubleshooting.
 
 **User Query:**
 {query}
 
-**Available Context:**
+**Context:**
 - Namespace: {namespace}
 - Pod Name: {pod_name}
 
-**Available kubectl Commands (READ-ONLY):**
-- kubectl get [pods|nodes|services|deployments|namespaces|events|configmaps|secrets|pvc|pv|ingress|networkpolicies|endpoints|serviceaccounts|rolebindings]
-- kubectl describe [resource-type] [resource-name] -n [namespace]
-- kubectl logs [pod-name] -n [namespace] [--previous] [--tail=N] [--since=TIME]
-- kubectl top [nodes|pods] -n [namespace]
-- kubectl get events -n [namespace] [--sort-by=.lastTimestamp] [--field-selector=...]
-- kubectl get pods --show-labels -n [namespace] (useful for network policy debugging)
-
-**Available kubectl Commands (WRITE - use when explicitly requested):**
-- kubectl delete pods -n [namespace] --field-selector=status.phase!=Running (delete non-running pods)
-- kubectl delete pod [specific-pod-name] -n [namespace] (delete specific pod)
-- kubectl delete [resource-type] [resource-name] -n [namespace] (delete specific resource)
+{dynamic_knowledge}
 
 **Your Task:**
-Analyze the query intent and generate EXECUTABLE commands (no placeholders!).
+Based on the DISCOVERED resources and operations above (not hardcoded lists), analyze the user's query and determine the EXACT commands needed.
 
 **CRITICAL RULES:**
 1. ❌ NEVER use placeholders like POD_NAME, <pod-name>, {pod_name}
 2. ✅ Use field-selectors for bulk operations: --field-selector=status.phase!=Running
-3. ✅ If query mentions specific pod name, use it directly
+3. ✅ If query mentions specific resource name, use it directly
 4. ✅ Generate commands that execute WITHOUT manual substitution
+5. ✅ Use ONLY the resources and operations that were discovered in this environment
 
-**DELETE Operations - Correct Patterns:**
-❌ WRONG: kubectl delete pod POD_NAME -n {namespace}
-❌ WRONG: kubectl delete pod <pod-name> -n {namespace}
-✅ CORRECT: kubectl delete pods -n {namespace} --field-selector=status.phase!=Running
-✅ CORRECT: kubectl delete pod grafana-operator-xyz -n {namespace} (if specific name in query)
-
-**DESCRIBE Operations - Correct Patterns:**
-❌ WRONG: kubectl describe pod POD_NAME -n {namespace}
-✅ CORRECT: Skip describe in bulk operations (not needed for delete)
-✅ CORRECT: kubectl describe pod grafana-operator-xyz -n {namespace} (if specific name given)
-
-**Think:**
-- User says "delete pods not running" → Use field-selector to delete directly
-- User says "delete pod grafana-xyz" → Use actual name grafana-xyz
-- User says "check pod status" → kubectl get pods (no placeholders)
-
-**Common Troubleshooting Patterns:**
-- Pod crashes/restarts → describe pod + logs --previous + events
-- Resource issues (CPU/Memory) → top pods/nodes + describe pod + events
-- Config issues → get configmaps/secrets + describe pod + logs
-- Network connectivity issues → get services + describe service + get endpoints + get networkpolicies
-- Network policy blocking → get networkpolicies + describe networkpolicy + get pods --show-labels
-- Certificate/TLS issues → describe pod + logs + get secrets + describe ingress
-- Storage/PVC issues → get pvc + describe pvc + get pv + describe pod (check volume mounts)
-- Slow performance → top pods/nodes + logs + describe pod
-- Permission/RBAC errors → describe pod + logs + get serviceaccounts + get rolebindings
-- ImagePullBackOff → describe pod + events + get secrets (check image pull secrets)
-- DNS resolution issues → describe pod + logs + get services + get endpoints
+**Think like an expert:**
+- What information do I need to diagnose this issue?
+- Which discovered resources are relevant?
+- What's the logical investigation sequence?
+- Have similar issues been resolved before? (check learned patterns above)
 
 **Output Format (JSON only, no markdown, no explanation):**
 {{
   "commands": [
-    {{"cmd": "actual kubectl command here", "reason": "why this command"}},
+    {{"cmd": "actual command here", "reason": "why this command"}},
     ...max 5 commands
   ]
 }}
 
-Now analyze the user query and generate the appropriate kubectl commands in JSON format:""",
+Analyze the query and generate commands based on DISCOVERED capabilities:""",
             
             'troubleshoot': """You are a Kubernetes and RHEL systems expert. A user has a query about their Kubernetes cluster.
 
@@ -380,16 +352,20 @@ Focus on practical, measurable improvements."""
     def generate_diagnostic_commands(self, query: str, namespace: str = "default", pod_name: str = "") -> List[Dict[str, str]]:
         """
         Use LLM to dynamically generate appropriate kubectl commands based on query.
-        This is TRUE AI-driven decision making - no hardcoded patterns.
+        Now uses DISCOVERED knowledge instead of hardcoded patterns.
         100% AI - no fallback. If Ollama unavailable, system fails gracefully.
         """
         if not self._check_ollama_available():
             raise AgentProcessingError("Ollama LLM required for command generation. Start with: ollama serve")
         
+        # Get dynamic knowledge from knowledge agent
+        dynamic_context = self.knowledge_agent.generate_dynamic_prompt_context()
+        
         prompt = self.prompt_templates['generate_commands'].format(
             query=query,
             namespace=namespace,
-            pod_name=pod_name or "not-specified"
+            pod_name=pod_name or "not-specified",
+            dynamic_knowledge=dynamic_context
         )
         
         try:
@@ -416,6 +392,13 @@ Focus on practical, measurable improvements."""
                 raise AgentProcessingError(f"LLM response didn't contain valid JSON: {response_text[:200]}")
         except Exception as e:
             raise AgentProcessingError(f"LLM command generation failed: {e}")
+    
+    def learn_from_resolution(self, query: str, commands_executed: List[str], outcome: str):
+        """
+        Learn from successful troubleshooting session.
+        This builds knowledge over time instead of hardcoding patterns.
+        """
+        self.knowledge_agent.learn_from_successful_resolution(query, commands_executed, outcome)
     
     def generate_embeddings(self, text: str) -> List[float]:
         """Generate embeddings for text"""
