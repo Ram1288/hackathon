@@ -1,0 +1,13 @@
+document_agent:
+  doc_dir: ./docs
+execution_agent:
+  kubeconfig_path: ~/.kube/config
+  ssh_enabled: false
+llm_agent:
+  max_tokens: 1000
+  model: llama3.1:8b
+  ollama_url: http://localhost:11434
+  temperature: 0.7
+orchestrator:
+  max_session_history: 100
+  session_timeout: 3600

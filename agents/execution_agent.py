@@ -25,23 +25,8 @@ class ExecutionAgent(BaseAgent):
         
         self.execution_modes = {
             'kubectl': self._execute_kubectl,
-            'diagnostic': self._execute_diagnostic,
             'shell': self._execute_shell,
             'python_k8s': self._execute_python_k8s
-        }
-        
-        # Command templates for common K8s operations
-        self.k8s_templates = {
-            'pod_status': 'kubectl get pods -n {namespace} -o wide',
-            'pod_logs': 'kubectl logs {pod_name} -n {namespace} --tail={lines}',
-            'service_status': 'kubectl get svc -n {namespace}',
-            'node_status': 'kubectl get nodes -o wide',
-            'deployment_status': 'kubectl get deployments -n {namespace}',
-            'describe_pod': 'kubectl describe pod {pod_name} -n {namespace}',
-            'top_pods': 'kubectl top pods -n {namespace}',
-            'top_nodes': 'kubectl top nodes',
-            'events': 'kubectl get events -n {namespace} --sort-by=.lastTimestamp',
-            'failing_pods': 'kubectl get pods -n {namespace} --field-selector=status.phase!=Running,status.phase!=Succeeded'
         }
         
         # Safety: forbidden commands for security
@@ -117,25 +102,24 @@ class ExecutionAgent(BaseAgent):
         return True
     
     def _determine_execution_mode(self, request: AgentRequest) -> str:
-        """Determine which execution mode to use"""
-        query_lower = request.query.lower()
-        
-        # Check for diagnostic keywords
-        if any(diag in query_lower for diag in ['diagnose', 'troubleshoot', 'debug', 'check health']):
-            return 'diagnostic'
-        
-        # Check for kubectl keywords
-        if 'kubectl' in query_lower or any(
-            k in query_lower for k in ['pod', 'service', 'deployment', 'namespace', 'events']
-        ):
+        """
+        Determine execution mode - simplified for AI-driven approach.
+        LLM decides commands, we just execute them.
+        """
+        # If AI has generated commands, use kubectl mode
+        if 'ai_generated_commands' in request.context:
             return 'kubectl'
         
-        # Check for Python K8s API
-        if 'python' in query_lower and ('k8s' in query_lower or 'kubernetes' in query_lower):
-            return 'python_k8s'
+        # Check for explicit kubectl command
+        if 'kubectl' in request.query.lower():
+            return 'kubectl'
         
-        # Default to shell for other commands
-        return 'shell'
+        # Check for shell commands
+        if any(request.query.strip().startswith(cmd) for cmd in ['ls', 'pwd', 'whoami', 'date', 'df', 'free', 'uptime']):
+            return 'shell'
+        
+        # Default to kubectl for K8s queries (LLM will handle or fallback will trigger)
+        return 'kubectl'
     
     def _execute_kubectl(self, request: AgentRequest) -> Dict:
         """Execute kubectl commands"""
@@ -169,80 +153,18 @@ class ExecutionAgent(BaseAgent):
             
             return results
         
-        # Otherwise use template-based approach (legacy)
-        # Extract parameters from request
-        namespace = request.context.get('namespace', 'default')
-        pod_name = request.context.get('pod_name', '')
-        
-        # Map query to kubectl commands
-        commands_to_run = []
-        query_lower = request.query.lower()
-        
-        # Check for namespace queries
-        if 'namespace' in query_lower and ('list' in query_lower or 'show' in query_lower or 'get' in query_lower):
-            commands_to_run.append('kubectl get namespaces')
-        
-        if 'pod' in query_lower and 'status' in query_lower:
-            commands_to_run.append(
-                self.k8s_templates['pod_status'].format(namespace=namespace)
-            )
-        
-        if 'failing' in query_lower or 'error' in query_lower or 'problem' in query_lower:
-            commands_to_run.append(
-                self.k8s_templates['failing_pods'].format(namespace=namespace)
-            )
-        
-        if 'log' in query_lower and pod_name:
-            commands_to_run.append(
-                self.k8s_templates['pod_logs'].format(
-                    pod_name=pod_name,
-                    namespace=namespace,
-                    lines=100
-                )
-            )
-        
-        if 'event' in query_lower:
-            commands_to_run.append(
-                self.k8s_templates['events'].format(namespace=namespace)
-            )
-        
-        if 'node' in query_lower:
-            commands_to_run.append(self.k8s_templates['node_status'])
-            if 'resource' in query_lower or 'usage' in query_lower:
-                commands_to_run.append(self.k8s_templates['top_nodes'])
-        
-        if 'describe' in query_lower and pod_name:
-            commands_to_run.append(
-                self.k8s_templates['describe_pod'].format(
-                    pod_name=pod_name,
-                    namespace=namespace
-                )
-            )
-        
-        # Check for service queries
-        if 'service' in query_lower or 'svc' in query_lower:
-            commands_to_run.append(
-                self.k8s_templates['service_status'].format(namespace=namespace)
-            )
-        
-        # Check for deployment queries
-        if 'deployment' in query_lower or 'deploy' in query_lower:
-            commands_to_run.append(
-                self.k8s_templates['deployment_status'].format(namespace=namespace)
-            )
-        
-        # If no specific commands matched and query mentions "pod", do a pod check
-        # Otherwise if it's just "list all", show pods as a reasonable default
-        if not commands_to_run:
-            if 'pod' in query_lower or 'list all' in query_lower or 'show all' in query_lower:
-                commands_to_run.append(
-                    self.k8s_templates['pod_status'].format(namespace=namespace)
-                )
+        # Fallback: Simple generic commands when LLM completely unavailable
+        # This is MINIMAL - just enough to not fail completely
+        print("   ⚠️  LLM unavailable - using minimal fallback...")
+        commands_to_run = self._minimal_fallback(request)
         
         # Execute commands
         results = {}
-        for cmd in commands_to_run:
+        for cmd_obj in commands_to_run:
+            cmd = cmd_obj['cmd']
+            reason = cmd_obj['reason']
             try:
+                print(f"   ▶ {reason}")
                 result = self._execute_local_command(cmd)
                 results[cmd] = result
             except Exception as e:
@@ -253,77 +175,18 @@ class ExecutionAgent(BaseAgent):
         
         return results
     
-    def _execute_diagnostic(self, request: AgentRequest) -> Dict:
-        """Run comprehensive diagnostics"""
+    def _minimal_fallback(self, request: AgentRequest) -> List[Dict]:
+        """
+        Absolute minimal fallback when LLM is unavailable.
+        Just returns generic pod status - no intelligence here.
+        """
         namespace = request.context.get('namespace', 'default')
-        diagnostics = {
-            'timestamp': time.time(),
-            'namespace': namespace,
-            'checks': {}
-        }
         
-        if not self.k8s_available:
-            diagnostics['error'] = 'kubectl not available'
-            return diagnostics
-        
-        # Standard diagnostic commands
-        diagnostic_commands = {
-            'failing_pods': f"kubectl get pods -n {namespace} --field-selector=status.phase!=Running,status.phase!=Succeeded",
-            'recent_events': f"kubectl get events -n {namespace} --sort-by=.lastTimestamp --field-selector type=Warning",
-            'node_status': "kubectl get nodes -o wide",
-            'pod_status': f"kubectl get pods -n {namespace} -o wide",
-        }
-        
-        # Try to get node resources if available
-        try:
-            diagnostic_commands['node_resources'] = "kubectl top nodes"
-        except:
-            pass
-        
-        # Execute diagnostic commands
-        for check_name, cmd in diagnostic_commands.items():
-            try:
-                result = self._execute_local_command(cmd)
-                diagnostics['checks'][check_name] = result
-            except Exception as e:
-                diagnostics['checks'][check_name] = {
-                    'error': str(e),
-                    'command': cmd
-                }
-        
-        # Parse and summarize issues
-        diagnostics['summary'] = self._summarize_diagnostics(diagnostics['checks'])
-        
-        return diagnostics
-    
-    def _summarize_diagnostics(self, checks: Dict) -> Dict:
-        """Summarize diagnostic results"""
-        summary = {
-            'total_issues': 0,
-            'critical_issues': [],
-            'warnings': []
-        }
-        
-        # Check for failing pods
-        if 'failing_pods' in checks and 'stdout' in checks['failing_pods']:
-            output = checks['failing_pods']['stdout']
-            lines = output.strip().split('\n')
-            if len(lines) > 1:  # More than just header
-                summary['total_issues'] += len(lines) - 1
-                summary['critical_issues'].append(
-                    f"{len(lines) - 1} pod(s) not in Running/Succeeded state"
-                )
-        
-        # Check for warning events
-        if 'recent_events' in checks and 'stdout' in checks['recent_events']:
-            output = checks['recent_events']['stdout']
-            lines = output.strip().split('\n')
-            if len(lines) > 1:
-                summary['warnings'].append(
-                    f"{len(lines) - 1} warning event(s) detected"
-                )
-        
-        return summary
+        # When LLM is down, we can only do basic pod listing
+        return [{
+            'cmd': f'kubectl get pods -n {namespace} -o wide',
+            'reason': 'Basic pod status (LLM unavailable for smart diagnostics)'
+        }]
     
     def _execute_python_k8s(self, request: AgentRequest) -> Dict:
         """Execute Python K8s API calls (placeholder)"""

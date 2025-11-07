@@ -30,37 +30,51 @@ class LLMAgent(BaseAgent):
         
         # Specialized prompts for K8s troubleshooting
         self.prompt_templates = {
-            'generate_commands': """You are a Kubernetes expert. Based on the user's query, generate the EXACT kubectl commands needed to gather diagnostic information.
+            'generate_commands': """You are a Kubernetes expert. Analyze the user's query and dynamically determine the EXACT kubectl commands needed.
 
 **User Query:**
 {query}
 
-**Context:**
+**Available Context:**
 - Namespace: {namespace}
-- Pod Name (if mentioned): {pod_name}
+- Pod Name: {pod_name}
+
+**Available kubectl Commands (READ-ONLY):**
+- kubectl get [pods|nodes|services|deployments|namespaces|events|configmaps|secrets|pvc|pv|ingress|networkpolicies|endpoints|serviceaccounts|rolebindings]
+- kubectl describe [resource-type] [resource-name] -n [namespace]
+- kubectl logs [pod-name] -n [namespace] [--previous] [--tail=N] [--since=TIME]
+- kubectl top [nodes|pods] -n [namespace]
+- kubectl get events -n [namespace] [--sort-by=.lastTimestamp] [--field-selector=...]
+- kubectl get pods --show-labels -n [namespace] (useful for network policy debugging)
 
 **Your Task:**
-Generate a JSON list of kubectl commands to run. Each command should gather specific diagnostic information related to the query.
+Analyze the query intent and generate appropriate commands. Think like a K8s expert:
+- What information is needed to answer this query?
+- Which resources need inspection?
+- What's the logical order of investigation?
 
-**Rules:**
-1. Only use READ-ONLY kubectl commands: get, describe, logs, top, explain, api-resources
-2. Include --previous flag for logs if query mentions restarts/crashes
-3. Include events if troubleshooting issues
-4. Be specific - if pod name is mentioned, use it
-5. Maximum 5 commands
+**Common Troubleshooting Patterns:**
+- Pod crashes/restarts → describe pod + logs --previous + events
+- Resource issues (CPU/Memory) → top pods/nodes + describe pod + events
+- Config issues → get configmaps/secrets + describe pod + logs
+- Network connectivity issues → get services + describe service + get endpoints + get networkpolicies
+- Network policy blocking → get networkpolicies + describe networkpolicy + get pods --show-labels
+- Certificate/TLS issues → describe pod + logs + get secrets + describe ingress
+- Storage/PVC issues → get pvc + describe pvc + get pv + describe pod (check volume mounts)
+- Slow performance → top pods/nodes + logs + describe pod
+- Permission/RBAC errors → describe pod + logs + get serviceaccounts + get rolebindings
+- ImagePullBackOff → describe pod + events + get secrets (check image pull secrets)
+- DNS resolution issues → describe pod + logs + get services + get endpoints
 
-**Output Format (JSON only, no explanation):**
-```json
+**Output Format (JSON only, no markdown, no explanation):**
 {{
   "commands": [
-    {{"cmd": "kubectl get pods -n {namespace}", "reason": "Check pod status"}},
-    {{"cmd": "kubectl describe pod <pod-name> -n {namespace}", "reason": "Get detailed pod information"}},
-    {{"cmd": "kubectl logs <pod-name> -n {namespace} --previous", "reason": "Check previous container logs for crash reason"}}
+    {{"cmd": "actual kubectl command here", "reason": "why this command"}},
+    ...max 5 commands
   ]
 }}
-```
 
-Generate commands now:""",
+Think step-by-step about what diagnostics are needed, then output JSON:""",
             
             'troubleshoot': """You are a Kubernetes and RHEL systems expert. A user has a query about their Kubernetes cluster.
 
@@ -427,16 +441,17 @@ For now, use the diagnostic commands above to gather more information."""
     
     def generate_diagnostic_commands(self, query: str, namespace: str = "default", pod_name: str = "") -> List[Dict[str, str]]:
         """
-        Use LLM to generate appropriate kubectl commands based on the query.
-        Returns list of commands with reasons.
+        Use LLM to dynamically generate appropriate kubectl commands based on query.
+        This is TRUE AI-driven decision making - no hardcoded patterns.
         """
         if not self._check_ollama_available():
-            return self._generate_fallback_commands(query, namespace, pod_name)
+            print("[WARN] Ollama unavailable - falling back to minimal diagnostics")
+            return []  # Return empty, let execution agent handle minimal fallback
         
         prompt = self.prompt_templates['generate_commands'].format(
             query=query,
             namespace=namespace,
-            pod_name=pod_name or "<pod-name>"
+            pod_name=pod_name or "not-specified"
         )
         
         try:
@@ -446,45 +461,26 @@ For now, use the diagnostic commands above to gather more information."""
             import json
             import re
             
-            # Find JSON in the response
-            json_match = re.search(r'\{[\s\S]*"commands"[\s\S]*\}', response_text)
+            # Find JSON in the response (handle both with and without markdown)
+            json_match = re.search(r'\{[\s\S]*?"commands"[\s\S]*?\[[\s\S]*?\][\s\S]*?\}', response_text)
             if json_match:
                 commands_data = json.loads(json_match.group())
                 commands = commands_data.get('commands', [])
                 
                 # Replace placeholders with actual values
                 for cmd_obj in commands:
-                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('<pod-name>', pod_name if pod_name else 'POD_NAME')
-                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('{namespace}', namespace)
+                    if isinstance(cmd_obj, dict) and 'cmd' in cmd_obj:
+                        cmd_obj['cmd'] = cmd_obj['cmd'].replace('<pod-name>', pod_name if pod_name else 'POD_NAME')
+                        cmd_obj['cmd'] = cmd_obj['cmd'].replace('{namespace}', namespace)
                 
+                print(f"[DEBUG] LLM generated {len(commands)} commands dynamically")
                 return commands[:5]  # Limit to 5 commands
             else:
-                return self._generate_fallback_commands(query, namespace, pod_name)
+                print(f"[WARN] LLM response didn't contain valid JSON: {response_text[:200]}")
+                return []  # Let execution agent handle fallback
         except Exception as e:
-            print(f"[DEBUG] Failed to generate commands via LLM: {e}")
-            return self._generate_fallback_commands(query, namespace, pod_name)
-    
-    def _generate_fallback_commands(self, query: str, namespace: str, pod_name: str) -> List[Dict[str, str]]:
-        """Generate fallback commands when LLM is not available"""
-        query_lower = query.lower()
-        commands = []
-        
-        # If pod name mentioned and query about restarts/crashes
-        if pod_name and any(word in query_lower for word in ['restart', 'crash', 'fail', 'error', 'oom', 'killed']):
-            commands.append({"cmd": f"kubectl describe pod {pod_name} -n {namespace}", "reason": "Get detailed pod information"})
-            commands.append({"cmd": f"kubectl logs {pod_name} -n {namespace} --previous", "reason": "Check previous container logs"})
-            commands.append({"cmd": f"kubectl logs {pod_name} -n {namespace}", "reason": "Check current container logs"})
-            commands.append({"cmd": f"kubectl get events -n {namespace} --field-selector involvedObject.name={pod_name}", "reason": "Get pod-specific events"})
-        elif pod_name:
-            commands.append({"cmd": f"kubectl describe pod {pod_name} -n {namespace}", "reason": "Get detailed pod information"})
-            commands.append({"cmd": f"kubectl logs {pod_name} -n {namespace} --tail=100", "reason": "Check recent logs"})
-        else:
-            # General diagnostic commands
-            commands.append({"cmd": f"kubectl get pods -n {namespace} -o wide", "reason": "List all pods with details"})
-            if 'event' in query_lower:
-                commands.append({"cmd": f"kubectl get events -n {namespace} --sort-by='.lastTimestamp'", "reason": "Get recent events"})
-        
-        return commands
+            print(f"[ERROR] LLM command generation failed: {e}")
+            return []  # Let execution agent handle fallback
     
     def generate_embeddings(self, text: str) -> List[float]:
         """Generate embeddings for text"""
