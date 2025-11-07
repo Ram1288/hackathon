@@ -1,0 +1,26 @@
+# Application Configuration
+# Copy this file and customize as needed
+
+app:
+  name: "K8s Troubleshooting AI"
+  version: "1.0.0"
+  environment: "development"
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+
+logging:
+  level: "INFO"
+  format: "json"
+
+agents:
+  llm:
+    model: "gpt-4"
+    temperature: 0.7
+
+  execution:
+    timeout: 300
+
+  document:
+    max_documents: 100

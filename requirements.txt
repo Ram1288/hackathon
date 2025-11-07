@@ -1,0 +1,23 @@
+# DevDebug AI Requirements
+
+# Core dependencies
+pyyaml>=6.0
+requests>=2.31.0
+
+# CLI dependencies
+click>=8.1.0
+rich>=13.0.0
+
+# API dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# Kubernetes client (optional but recommended)
+kubernetes>=28.1.0
+
+# SSH support (optional)
+paramiko>=3.3.1
+
+# Additional utilities
+python-dateutil>=2.8.2
