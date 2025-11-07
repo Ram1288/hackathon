@@ -53,18 +53,29 @@ class LLMAgent(BaseAgent):
 - kubectl delete [resource-type] [resource-name] -n [namespace] (delete specific resource)
 
 **Your Task:**
-Analyze the query intent and generate appropriate commands. Think like a K8s expert:
-- What information is needed to answer this query?
-- Which resources need inspection?
-- What's the logical order of investigation?
-- **IMPORTANT**: Use ACTUAL resource names from context, NOT placeholders like POD_NAME
+Analyze the query intent and generate EXECUTABLE commands (no placeholders!).
 
-**For DELETE/MODIFY Operations:**
-- First command: Get list of resources (e.g., kubectl get pods --field-selector=status.phase!=Running)
-- Subsequent commands: Use actual names from the query or namespace (avoid POD_NAME placeholder)
-- If specific pod names are in query: Use them directly
-- If query says "all" or "pods not running": Generate commands that work without placeholders
-  Example: kubectl delete pods -n {namespace} --field-selector=status.phase!=Running
+**CRITICAL RULES:**
+1. ❌ NEVER use placeholders like POD_NAME, <pod-name>, {pod_name}
+2. ✅ Use field-selectors for bulk operations: --field-selector=status.phase!=Running
+3. ✅ If query mentions specific pod name, use it directly
+4. ✅ Generate commands that execute WITHOUT manual substitution
+
+**DELETE Operations - Correct Patterns:**
+❌ WRONG: kubectl delete pod POD_NAME -n {namespace}
+❌ WRONG: kubectl delete pod <pod-name> -n {namespace}
+✅ CORRECT: kubectl delete pods -n {namespace} --field-selector=status.phase!=Running
+✅ CORRECT: kubectl delete pod grafana-operator-xyz -n {namespace} (if specific name in query)
+
+**DESCRIBE Operations - Correct Patterns:**
+❌ WRONG: kubectl describe pod POD_NAME -n {namespace}
+✅ CORRECT: Skip describe in bulk operations (not needed for delete)
+✅ CORRECT: kubectl describe pod grafana-operator-xyz -n {namespace} (if specific name given)
+
+**Think:**
+- User says "delete pods not running" → Use field-selector to delete directly
+- User says "delete pod grafana-xyz" → Use actual name grafana-xyz
+- User says "check pod status" → kubectl get pods (no placeholders)
 
 **Common Troubleshooting Patterns:**
 - Pod crashes/restarts → describe pod + logs --previous + events
@@ -87,7 +98,7 @@ Analyze the query intent and generate appropriate commands. Think like a K8s exp
   ]
 }}
 
-Think step-by-step about what diagnostics are needed, then output JSON:""",
+Now analyze the user query and generate the appropriate kubectl commands in JSON format:""",
             
             'troubleshoot': """You are a Kubernetes and RHEL systems expert. A user has a query about their Kubernetes cluster.
 
@@ -195,7 +206,10 @@ Focus on practical, measurable improvements."""
         try:
             # Check if Ollama is available
             if not self._check_ollama_available():
-                return self._create_fallback_response(request, start_time)
+                raise AgentProcessingError(
+                    "Ollama LLM service is not available. This is a 100% AI-driven system. "
+                    "Please start Ollama: 'ollama serve' and ensure model is available: 'ollama pull llama3.1:8b'"
+                )
             
             # Determine prompt type
             prompt_type = self._determine_prompt_type(request)
@@ -226,8 +240,17 @@ Focus on practical, measurable improvements."""
             )
         except Exception as e:
             execution_time = time.time() - start_time
-            # Try fallback response
-            return self._create_fallback_response(request, start_time, error=str(e))
+            return AgentResponse(
+                success=False,
+                data={},
+                error=str(e),
+                metadata={
+                    'ollama_available': False,
+                    'error_type': type(e).__name__
+                },
+                agent_type=self.agent_type,
+                execution_time=execution_time
+            )
     
     def _check_ollama_available(self) -> bool:
         """Check if Ollama is running and model is available"""
@@ -241,19 +264,15 @@ Focus on practical, measurable improvements."""
             return False
     
     def _determine_prompt_type(self, request: AgentRequest) -> str:
-        """Determine which prompt template to use"""
-        query_lower = request.query.lower()
+        """
+        Determine which prompt template to use.
         
-        if 'script' in query_lower or 'generate' in query_lower or 'write code' in query_lower:
-            return 'generate_script'
-        elif 'log' in query_lower and ('analyze' in query_lower or 'check' in query_lower):
-            return 'analyze_logs'
-        elif 'explain' in query_lower or 'what is' in query_lower or 'how does' in query_lower:
-            return 'explain'
-        elif 'optimize' in query_lower or 'improve' in query_lower or 'performance' in query_lower:
-            return 'optimize'
-        else:
-            return 'troubleshoot'
+        For AI-driven approach, we primarily use 'troubleshoot' which handles everything.
+        Only use specialized templates when explicitly clear from context.
+        """
+        # Always use troubleshoot template - it's comprehensive and AI-driven
+        # The LLM will adapt its response based on the query intent automatically
+        return 'troubleshoot'
     
     def _build_prompt(self, prompt_type: str, request: AgentRequest) -> str:
         """Build prompt from template and context"""
@@ -356,110 +375,16 @@ Focus on practical, measurable improvements."""
         except requests.exceptions.RequestException as e:
             raise AgentProcessingError(f"Ollama query failed: {str(e)}")
     
-    def _create_fallback_response(
-        self, 
-        request: AgentRequest, 
-        start_time: float,
-        error: Optional[str] = None
-    ) -> AgentResponse:
-        """Create a fallback response when Ollama is not available"""
-        fallback_message = self._generate_rule_based_response(request)
-        
-        execution_time = time.time() - start_time
-        
-        return AgentResponse(
-            success=True,
-            data={
-                'response': fallback_message,
-                'prompt_type': 'fallback',
-                'model': 'rule-based-fallback'
-            },
-            error=error,
-            metadata={
-                'ollama_available': False,
-                'fallback_mode': True
-            },
-            agent_type=self.agent_type,
-            execution_time=execution_time
-        )
-    
-    def _generate_rule_based_response(self, request: AgentRequest) -> str:
-        """Generate a rule-based response when LLM is not available"""
-        query_lower = request.query.lower()
-        
-        # Check for common K8s issues
-        if 'crashloop' in query_lower or 'backoff' in query_lower:
-            return """**CrashLoopBackOff Troubleshooting:**
 
-1. Check pod logs: `kubectl logs <pod-name> -n <namespace> --previous`
-2. Describe the pod: `kubectl describe pod <pod-name> -n <namespace>`
-3. Check resource limits: `kubectl get pod <pod-name> -n <namespace> -o yaml | grep -A 5 resources`
-
-**Common Causes:**
-- Application crashes on startup
-- Missing environment variables or config
-- Insufficient resources
-- Failed liveness/readiness probes
-
-**Note:** Ollama LLM is not available. Install and start Ollama for more detailed analysis."""
-        
-        elif 'imagepull' in query_lower:
-            return """**ImagePullBackOff Troubleshooting:**
-
-1. Verify image name: `kubectl describe pod <pod-name> -n <namespace>`
-2. Check image exists: Verify in your container registry
-3. Check credentials: `kubectl get secrets -n <namespace>`
-
-**Common Causes:**
-- Incorrect image name or tag
-- Private registry without imagePullSecret
-- Network connectivity issues
-- Registry authentication failure
-
-**Note:** Ollama LLM is not available. Install and start Ollama for more detailed analysis."""
-        
-        elif 'oom' in query_lower or 'memory' in query_lower:
-            return """**OOM (Out of Memory) Troubleshooting:**
-
-1. Check events: `kubectl get events -n <namespace> --sort-by='.lastTimestamp'`
-2. Review resource limits: `kubectl describe pod <pod-name> -n <namespace>`
-3. Check memory usage: `kubectl top pod <pod-name> -n <namespace>`
-
-**Solutions:**
-- Increase memory limits
-- Optimize application memory usage
-- Check for memory leaks
-
-**Note:** Ollama LLM is not available. Install and start Ollama for more detailed analysis."""
-        
-        else:
-            return f"""**Troubleshooting Guide:**
-
-I've detected your issue: "{request.query}"
-
-**General Kubernetes Troubleshooting Steps:**
-
-1. **Check Pod Status:** `kubectl get pods -n <namespace>`
-2. **View Pod Details:** `kubectl describe pod <pod-name> -n <namespace>`
-3. **Check Logs:** `kubectl logs <pod-name> -n <namespace>`
-4. **Review Events:** `kubectl get events -n <namespace> --sort-by='.lastTimestamp'`
-5. **Check Resources:** `kubectl top pods -n <namespace>`
-
-**Note:** Ollama LLM is not available. For more detailed, AI-powered analysis:
-1. Install Ollama: `curl -fsSL https://ollama.ai/install.sh | sh`
-2. Pull Llama model: `ollama pull llama3.1:8b`
-3. Start Ollama service
-
-For now, use the diagnostic commands above to gather more information."""
     
     def generate_diagnostic_commands(self, query: str, namespace: str = "default", pod_name: str = "") -> List[Dict[str, str]]:
         """
         Use LLM to dynamically generate appropriate kubectl commands based on query.
         This is TRUE AI-driven decision making - no hardcoded patterns.
+        100% AI - no fallback. If Ollama unavailable, system fails gracefully.
         """
         if not self._check_ollama_available():
-            print("[WARN] Ollama unavailable - falling back to minimal diagnostics")
-            return []  # Return empty, let execution agent handle minimal fallback
+            raise AgentProcessingError("Ollama LLM required for command generation. Start with: ollama serve")
         
         prompt = self.prompt_templates['generate_commands'].format(
             query=query,
@@ -470,11 +395,10 @@ For now, use the diagnostic commands above to gather more information."""
         try:
             response_text = self._query_ollama(prompt)
             
-            # Try to extract JSON from response
+            # Extract JSON from response
             import json
             import re
             
-            # Find JSON in the response (handle both with and without markdown)
             json_match = re.search(r'\{[\s\S]*?"commands"[\s\S]*?\[[\s\S]*?\][\s\S]*?\}', response_text)
             if json_match:
                 commands_data = json.loads(json_match.group())
@@ -486,14 +410,12 @@ For now, use the diagnostic commands above to gather more information."""
                         cmd_obj['cmd'] = cmd_obj['cmd'].replace('<pod-name>', pod_name if pod_name else 'POD_NAME')
                         cmd_obj['cmd'] = cmd_obj['cmd'].replace('{namespace}', namespace)
                 
-                print(f"[DEBUG] LLM generated {len(commands)} commands dynamically")
+                print(f"[AI] LLM generated {len(commands)} commands dynamically")
                 return commands[:5]  # Limit to 5 commands
             else:
-                print(f"[WARN] LLM response didn't contain valid JSON: {response_text[:200]}")
-                return []  # Let execution agent handle fallback
+                raise AgentProcessingError(f"LLM response didn't contain valid JSON: {response_text[:200]}")
         except Exception as e:
-            print(f"[ERROR] LLM command generation failed: {e}")
-            return []  # Let execution agent handle fallback
+            raise AgentProcessingError(f"LLM command generation failed: {e}")
     
     def generate_embeddings(self, text: str) -> List[float]:
         """Generate embeddings for text"""

@@ -155,7 +155,7 @@ class ExecutionAgent(BaseAgent):
         if any(request.query.strip().startswith(cmd) for cmd in ['ls', 'pwd', 'whoami', 'date', 'df', 'free', 'uptime']):
             return 'shell'
         
-        # Default to kubectl for K8s queries (LLM will handle or fallback will trigger)
+        # Default to kubectl for K8s queries - LLM will generate commands
         return 'kubectl'
     
     def _execute_kubectl(self, request: AgentRequest) -> Dict:
@@ -190,40 +190,12 @@ class ExecutionAgent(BaseAgent):
             
             return results
         
-        # Fallback: Simple generic commands when LLM completely unavailable
-        # This is MINIMAL - just enough to not fail completely
-        print("   ⚠️  LLM unavailable - using minimal fallback...")
-        commands_to_run = self._minimal_fallback(request)
-        
-        # Execute commands
-        results = {}
-        for cmd_obj in commands_to_run:
-            cmd = cmd_obj['cmd']
-            reason = cmd_obj['reason']
-            try:
-                print(f"   ▶ {reason}")
-                result = self._execute_local_command(cmd)
-                results[cmd] = result
-            except Exception as e:
-                results[cmd] = {
-                    'error': str(e),
-                    'command': cmd
-                }
-        
-        return results
-    
-    def _minimal_fallback(self, request: AgentRequest) -> List[Dict]:
-        """
-        Absolute minimal fallback when LLM is unavailable.
-        Just returns generic pod status - no intelligence here.
-        """
-        namespace = request.context.get('namespace', 'default')
-        
-        # When LLM is down, we can only do basic pod listing
-        return [{
-            'cmd': f'kubectl get pods -n {namespace} -o wide',
-            'reason': 'Basic pod status (LLM unavailable for smart diagnostics)'
-        }]
+        # No fallback - 100% AI driven
+        # If we're here without AI commands, something went wrong
+        raise AgentProcessingError(
+            "No AI-generated commands available. This is a 100% AI-driven system. "
+            "Ensure LLM Agent is working properly and Ollama is running."
+        )
     
     def _execute_python_k8s(self, request: AgentRequest) -> Dict:
         """Execute Python K8s API calls (placeholder)"""
