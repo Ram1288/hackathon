@@ -31,8 +31,14 @@ class ExecutionAgent(BaseAgent):
         
         # Safety: forbidden commands for security
         self.forbidden_commands = self.config.get('forbidden_commands', [
-            'rm -rf', 'delete', 'destroy', 'mkfs', 'dd if='
+            'rm -rf', 'destroy', 'mkfs', 'dd if='
         ])
+        
+        # Permission flags - allow controlled operations when explicitly requested
+        self.allow_delete = self.config.get('allow_delete', False)
+        self.allow_create = self.config.get('allow_create', False)
+        self.allow_update = self.config.get('allow_update', False)
+        self.read_only_mode = self.config.get('read_only_mode', True)
         
         if self.ssh_enabled:
             self._setup_ssh_connection()
@@ -94,11 +100,42 @@ class ExecutionAgent(BaseAgent):
             )
     
     def _is_safe_command(self, command: str) -> bool:
-        """Check if command is safe to execute"""
+        """
+        Enhanced security check with granular permissions.
+        Allows operations when explicitly permitted via config.
+        """
         command_lower = command.lower()
+        
+        # Always block truly dangerous commands
         for forbidden in self.forbidden_commands:
             if forbidden.lower() in command_lower:
                 return False
+        
+        # Check for kubectl operations that need permissions
+        if 'kubectl delete' in command_lower or 'oc delete' in command_lower:
+            if not self.allow_delete:
+                print(f"   ⚠️  DELETE operation blocked (allow_delete=False)")
+                print(f"   💡 To enable: Set execution_agent.allow_delete: true in config")
+                return False
+        
+        if 'kubectl create' in command_lower or 'kubectl apply' in command_lower:
+            if not self.allow_create:
+                print(f"   ⚠️  CREATE operation blocked (allow_create=False)")
+                return False
+        
+        if 'kubectl patch' in command_lower or 'kubectl edit' in command_lower or 'kubectl scale' in command_lower:
+            if not self.allow_update:
+                print(f"   ⚠️  UPDATE operation blocked (allow_update=False)")
+                return False
+        
+        # In read-only mode, only allow safe read operations
+        if self.read_only_mode:
+            safe_read_ops = ['get', 'describe', 'logs', 'top', 'explain', 'api-resources', 'version']
+            if not any(f'kubectl {op}' in command_lower for op in safe_read_ops):
+                if not any(f'oc {op}' in command_lower for op in safe_read_ops):
+                    print(f"   ⚠️  Operation blocked in read-only mode")
+                    return False
+        
         return True
     
     def _determine_execution_mode(self, request: AgentRequest) -> str:

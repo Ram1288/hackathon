@@ -47,11 +47,24 @@ class LLMAgent(BaseAgent):
 - kubectl get events -n [namespace] [--sort-by=.lastTimestamp] [--field-selector=...]
 - kubectl get pods --show-labels -n [namespace] (useful for network policy debugging)
 
+**Available kubectl Commands (WRITE - use when explicitly requested):**
+- kubectl delete pods -n [namespace] --field-selector=status.phase!=Running (delete non-running pods)
+- kubectl delete pod [specific-pod-name] -n [namespace] (delete specific pod)
+- kubectl delete [resource-type] [resource-name] -n [namespace] (delete specific resource)
+
 **Your Task:**
 Analyze the query intent and generate appropriate commands. Think like a K8s expert:
 - What information is needed to answer this query?
 - Which resources need inspection?
 - What's the logical order of investigation?
+- **IMPORTANT**: Use ACTUAL resource names from context, NOT placeholders like POD_NAME
+
+**For DELETE/MODIFY Operations:**
+- First command: Get list of resources (e.g., kubectl get pods --field-selector=status.phase!=Running)
+- Subsequent commands: Use actual names from the query or namespace (avoid POD_NAME placeholder)
+- If specific pod names are in query: Use them directly
+- If query says "all" or "pods not running": Generate commands that work without placeholders
+  Example: kubectl delete pods -n {namespace} --field-selector=status.phase!=Running
 
 **Common Troubleshooting Patterns:**
 - Pod crashes/restarts → describe pod + logs --previous + events

@@ -30,12 +30,19 @@ execution_agent:
   ssh_enabled: false
   kubeconfig_path: "~/.kube/config"
   timeout: 300
+  
+  # Security Settings - Granular Control
+  read_only_mode: false        # Set to true to only allow safe read operations
+  allow_delete: true           # Allow kubectl delete operations
+  allow_create: false          # Block kubectl create/apply operations
+  allow_update: false          # Block kubectl edit/patch/scale operations
+  
+  # Forbidden Commands - Always blocked regardless of permissions
   forbidden_commands:
-    - "rm -rf"
-    - "delete"
-    - "destroy"
-    - "mkfs"
-    - "dd if="
+    - "rm -rf"        # Dangerous shell command
+    - "destroy"       # Destructive operations
+    - "mkfs"          # Filesystem formatting
+    - "dd if="        # Low-level disk operations
 
 # LLM Agent Configuration
 llm_agent:
