@@ -1,26 +1,50 @@
-# Application Configuration
-# Copy this file and customize as needed
+# DevDebug AI Configuration
+# Configuration for all agents and system components
 
 app:
-  name: "K8s Troubleshooting AI"
+  name: "DevDebug AI"
   version: "1.0.0"
   environment: "development"
 
 api:
   host: "0.0.0.0"
   port: 8000
+  cors_origins: "http://localhost:3000,http://localhost:8080"
 
 logging:
   level: "INFO"
-  format: "json"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/devdebug.log"
+  max_bytes: 10485760  # 10MB
+  backup_count: 5
 
-agents:
-  llm:
-    model: "gpt-4"
-    temperature: 0.7
+# Document Agent Configuration
+document_agent:
+  doc_dir: "./docs"
+  min_word_length: 3
+  max_results: 5
+  snippet_max_length: 500
 
-  execution:
-    timeout: 300
+# Execution Agent Configuration
+execution_agent:
+  ssh_enabled: false
+  kubeconfig_path: "~/.kube/config"
+  timeout: 300
+  forbidden_commands:
+    - "rm -rf"
+    - "delete"
+    - "destroy"
+    - "mkfs"
+    - "dd if="
 
-  document:
-    max_documents: 100
+# LLM Agent Configuration
+llm_agent:
+  ollama_url: "http://localhost:11434"
+  model: "llama3.1:8b"
+  temperature: 0.7
+  max_tokens: 1000
+
+# Orchestrator Configuration
+orchestrator:
+  max_session_history: 100
+  session_timeout: 3600

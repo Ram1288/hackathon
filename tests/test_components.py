@@ -5,16 +5,13 @@ Simple tests to validate core functionality
 """
 import sys
 from pathlib import Path
-
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import yaml
 
 from core.interfaces import AgentRequest, AgentResponse, AgentType
 from agents.document_agent import DocumentAgent
 from agents.execution_agent import ExecutionAgent
 from agents.llm_agent import LLMAgent
 from core.orchestrator import DevDebugOrchestrator
-import yaml
 
 
 def test_interfaces():
