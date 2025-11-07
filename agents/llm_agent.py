@@ -30,12 +30,12 @@ class LLMAgent(BaseAgent):
         
         # Specialized prompts for K8s troubleshooting
         self.prompt_templates = {
-            'troubleshoot': """You are a Kubernetes and RHEL systems expert. A user is experiencing an issue with their Kubernetes cluster.
+            'troubleshoot': """You are a Kubernetes and RHEL systems expert. A user has a query about their Kubernetes cluster.
 
-**User Issue:**
+**User Query:**
 {query}
 
-**Available Diagnostic Information:**
+**Diagnostic Results from kubectl:**
 {diagnostics}
 
 **Relevant Documentation:**
@@ -44,14 +44,20 @@ class LLMAgent(BaseAgent):
 **Code Examples Available:**
 {code_examples}
 
-Please provide a clear, step-by-step solution. Your response should include:
+IMPORTANT: First, analyze the diagnostic results carefully. If the kubectl commands executed successfully and returned results (pods, services, etc.), acknowledge this in your response. The user may be asking to list/view resources rather than troubleshoot a problem.
 
-1. **Root Cause Analysis**: Identify the likely cause of the issue
+If this is an informational query (list, show, get resources):
+- Summarize what was found in the diagnostic results
+- Provide a brief explanation of the resources
+- Suggest useful follow-up queries or commands
+
+If this is a troubleshooting query:
+1. **Root Cause Analysis**: Identify the likely cause of the issue based on the diagnostic data
 2. **Immediate Solution**: Provide specific commands or steps to fix the issue
 3. **Verification**: How to verify the fix worked
 4. **Prevention**: Steps to prevent this issue in the future
 
-Be concise, technical, and actionable. Focus on kubectl commands and Python Kubernetes client examples where appropriate.""",
+Be concise, technical, and actionable. Base your analysis on the actual diagnostic results provided.""",
             
             'analyze_logs': """You are a Kubernetes expert analyzing pod logs to identify issues.
 
@@ -223,7 +229,9 @@ Focus on practical, measurable improvements."""
         for key, value in diagnostics.items():
             if isinstance(value, dict):
                 if 'stdout' in value:
-                    formatted.append(f"**{key}:**\n```\n{value['stdout'][:500]}\n```")
+                    # Include full output for better context (up to 2000 chars)
+                    output = value['stdout'][:2000]
+                    formatted.append(f"**{key}:**\n```\n{output}\n```")
                 elif 'error' in value:
                     formatted.append(f"**{key}:** Error - {value['error']}")
             else:

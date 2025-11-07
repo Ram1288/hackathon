@@ -121,12 +121,13 @@ def troubleshoot(config, query, namespace, pod, session):
         diagnostics = result['diagnostics']
         
         if isinstance(diagnostics, dict):
-            for key, value in list(diagnostics.items())[:3]:  # Show first 3
+            for key, value in diagnostics.items():  # Show all diagnostics
                 if isinstance(value, dict) and 'stdout' in value:
                     output = value['stdout']
                     if output.strip():
                         console.print(f"\n[bold]{key}:[/bold]")
-                        console.print(Syntax(output[:500], "bash", theme="monokai", line_numbers=False))
+                        # Show full output for kubectl commands
+                        console.print(Syntax(output, "bash", theme="monokai", line_numbers=False))
     
     # Display K8s patterns if matched
     if result.get('k8s_patterns'):
