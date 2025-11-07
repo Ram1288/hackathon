@@ -28,6 +28,7 @@ class DevDebugOrchestrator:
         self.session_store = {}
         self.max_session_history = config.get('orchestrator', {}).get('max_session_history', 100)
         self.session_timeout = config.get('orchestrator', {}).get('session_timeout', 3600)
+        self.ai_driven_diagnostics = config.get('orchestrator', {}).get('ai_driven_diagnostics', True)
         self._initialize_agents()
     
     def _initialize_agents(self):
@@ -114,14 +115,47 @@ class DevDebugOrchestrator:
             else:
                 print(f"✗ Documentation search failed: {doc_response.error}")
             
-            # Step 2: Run diagnostics if needed
+            # Step 2: Run diagnostics - AI-driven command generation
             print("\n🔍 Step 2: Running diagnostics...")
-            exec_context = {
-                'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
-                'namespace': namespace
-            }
-            if pod_name:
-                exec_context['pod_name'] = pod_name
+            
+            if self.ai_driven_diagnostics:
+                # Let LLM decide which commands to run
+                print("🤖 Using AI to determine diagnostic commands...")
+                diagnostic_commands = self.agents['llm'].generate_diagnostic_commands(
+                    query=query,
+                    namespace=namespace,
+                    pod_name=pod_name or ""
+                )
+                
+                if diagnostic_commands:
+                    print(f"📋 Generated {len(diagnostic_commands)} diagnostic commands")
+                    for cmd_obj in diagnostic_commands:
+                        print(f"   • {cmd_obj.get('reason', 'Diagnostic')}: {cmd_obj.get('cmd', '')}")
+                    
+                    # Execute the AI-generated commands
+                    exec_context = {
+                        'ai_generated_commands': diagnostic_commands,
+                        'namespace': namespace
+                    }
+                    if pod_name:
+                        exec_context['pod_name'] = pod_name
+                else:
+                    # Fallback to template-based
+                    print("⚠ Falling back to template-based diagnostics")
+                    exec_context = {
+                        'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
+                        'namespace': namespace
+                    }
+                    if pod_name:
+                        exec_context['pod_name'] = pod_name
+            else:
+                # Use traditional template-based approach
+                exec_context = {
+                    'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
+                    'namespace': namespace
+                }
+                if pod_name:
+                    exec_context['pod_name'] = pod_name
             
             exec_request = AgentRequest(
                 query=query,

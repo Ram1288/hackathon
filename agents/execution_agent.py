@@ -145,6 +145,31 @@ class ExecutionAgent(BaseAgent):
                 'suggestion': 'Install kubectl or check your PATH'
             }
         
+        # Check if AI generated commands are provided
+        if 'ai_generated_commands' in request.context:
+            print("   📝 Executing AI-generated commands...")
+            ai_commands = request.context['ai_generated_commands']
+            results = {}
+            
+            for cmd_obj in ai_commands:
+                cmd = cmd_obj.get('cmd', '')
+                reason = cmd_obj.get('reason', 'Diagnostic')
+                
+                if cmd:
+                    try:
+                        print(f"   ▶ {reason}")
+                        result = self._execute_local_command(cmd)
+                        results[cmd] = result
+                    except Exception as e:
+                        results[cmd] = {
+                            'error': str(e),
+                            'command': cmd,
+                            'reason': reason
+                        }
+            
+            return results
+        
+        # Otherwise use template-based approach (legacy)
         # Extract parameters from request
         namespace = request.context.get('namespace', 'default')
         pod_name = request.context.get('pod_name', '')
@@ -152,6 +177,10 @@ class ExecutionAgent(BaseAgent):
         # Map query to kubectl commands
         commands_to_run = []
         query_lower = request.query.lower()
+        
+        # Check for namespace queries
+        if 'namespace' in query_lower and ('list' in query_lower or 'show' in query_lower or 'get' in query_lower):
+            commands_to_run.append('kubectl get namespaces')
         
         if 'pod' in query_lower and 'status' in query_lower:
             commands_to_run.append(
@@ -190,11 +219,25 @@ class ExecutionAgent(BaseAgent):
                 )
             )
         
-        # If no specific commands matched, do a general pod check
-        if not commands_to_run:
+        # Check for service queries
+        if 'service' in query_lower or 'svc' in query_lower:
             commands_to_run.append(
-                self.k8s_templates['pod_status'].format(namespace=namespace)
+                self.k8s_templates['service_status'].format(namespace=namespace)
             )
+        
+        # Check for deployment queries
+        if 'deployment' in query_lower or 'deploy' in query_lower:
+            commands_to_run.append(
+                self.k8s_templates['deployment_status'].format(namespace=namespace)
+            )
+        
+        # If no specific commands matched and query mentions "pod", do a pod check
+        # Otherwise if it's just "list all", show pods as a reasonable default
+        if not commands_to_run:
+            if 'pod' in query_lower or 'list all' in query_lower or 'show all' in query_lower:
+                commands_to_run.append(
+                    self.k8s_templates['pod_status'].format(namespace=namespace)
+                )
         
         # Execute commands
         results = {}

@@ -48,3 +48,4 @@ llm_agent:
 orchestrator:
   max_session_history: 100
   session_timeout: 3600
+  ai_driven_diagnostics: true  # Use LLM to generate diagnostic commands dynamically
