@@ -461,10 +461,10 @@ Analyze the findings and determine:
                     'returncode': result.returncode
                 }
                 
-                # Show brief preview of findings
+                # Show intelligent preview based on command type
                 if result.stdout:
-                    preview = result.stdout[:200].replace('\n', ' ')
-                    print(f"      ✓ Found data: {preview}...")
+                    preview = self._generate_preview(cmd, result.stdout)
+                    print(f"      ✓ {preview}")
                 
             except Exception as e:
                 results[cmd] = {'error': str(e)}
@@ -557,13 +557,183 @@ Output JSON:
             )
         return "\n".join(formatted)
     
+    def _extract_critical_sections(self, cmd: str, output: str) -> str:
+        """
+        Extract critical sections from kubectl output instead of truncating.
+        Prioritizes Events, errors, and relevant diagnostic information.
+        """
+        if not output:
+            return output
+        
+        # Handle 'kubectl describe pod' output
+        if 'describe pod' in cmd or 'describe deployment' in cmd:
+            return self._parse_describe_output(output)
+        
+        # Handle 'kubectl logs' output
+        elif 'logs' in cmd or 'log' in cmd:
+            return self._parse_logs_output(output)
+        
+        # For other commands, use smart truncation
+        else:
+            return output[:1000] if len(output) > 1000 else output
+    
+    def _generate_preview(self, cmd: str, output: str) -> str:
+        """
+        Generate an intelligent preview of command output for user display.
+        Shows the most important information based on command type.
+        """
+        if not output:
+            return "No output"
+        
+        # For describe commands, show critical errors from Events
+        if 'describe pod' in cmd or 'describe deployment' in cmd:
+            # Look for Events section
+            if 'Events:' in output:
+                events_section = output.split('Events:')[1] if 'Events:' in output else ''
+                
+                # Look for Warning/Failed events
+                warning_lines = [line.strip() for line in events_section.split('\n') 
+                                if 'Warning' in line or 'Failed' in line or 'Error:' in line]
+                
+                if warning_lines:
+                    # Show first critical error
+                    first_error = warning_lines[0][:150]
+                    return f"⚠️  Critical Event: {first_error}"
+            
+            # No critical events, show basic info
+            first_line = output.split('\n')[0] if output else ''
+            return f"Found data: {first_line[:100]}..."
+        
+        # For logs, show if errors were found
+        elif 'logs' in cmd or 'log' in cmd:
+            error_keywords = ['error', 'fatal', 'panic', 'exception', 'failed']
+            lines = output.split('\n')
+            error_count = sum(1 for line in lines if any(kw in line.lower() for kw in error_keywords))
+            
+            if error_count > 0:
+                return f"Found {error_count} error/warning line(s) in logs"
+            else:
+                return f"Found {len(lines)} log lines (no errors)"
+        
+        # For other commands, show simple preview
+        else:
+            preview = output[:150].replace('\n', ' ')
+            return f"Found data: {preview}..."
+    
+    def _parse_describe_output(self, output: str) -> str:
+        """
+        Parse kubectl describe pod/deployment output.
+        Extracts: Status, Conditions, Events (MOST IMPORTANT)
+        """
+        lines = output.split('\n')
+        critical_sections = []
+        
+        # Extract basic info (first few lines)
+        critical_sections.append("=== BASIC INFO ===")
+        critical_sections.extend(lines[:5])  # Name, Namespace, Priority, etc.
+        
+        # Extract Status section
+        in_status = False
+        status_lines = []
+        for i, line in enumerate(lines):
+            if line.startswith('Status:'):
+                in_status = True
+                status_lines.append(line)
+            elif in_status and line.startswith(' '):
+                status_lines.append(line)
+            elif in_status and not line.startswith(' '):
+                break
+        
+        if status_lines:
+            critical_sections.append("\n=== STATUS ===")
+            critical_sections.extend(status_lines)
+        
+        # Extract Conditions section
+        in_conditions = False
+        conditions_lines = []
+        for i, line in enumerate(lines):
+            if line.startswith('Conditions:'):
+                in_conditions = True
+                conditions_lines.append(line)
+                # Get next 10 lines or until next section
+                for j in range(i+1, min(i+15, len(lines))):
+                    if lines[j] and not lines[j][0].isspace() and ':' in lines[j]:
+                        break
+                    conditions_lines.append(lines[j])
+                break
+        
+        if conditions_lines:
+            critical_sections.append("\n=== CONDITIONS ===")
+            critical_sections.extend(conditions_lines)
+        
+        # Extract State and Reason (for containers)
+        state_lines = []
+        for i, line in enumerate(lines):
+            if 'State:' in line or 'Reason:' in line or 'Message:' in line:
+                state_lines.append(line)
+        
+        if state_lines:
+            critical_sections.append("\n=== CONTAINER STATE ===")
+            critical_sections.extend(state_lines)
+        
+        # Extract Events section (MOST CRITICAL - contains actual errors)
+        in_events = False
+        events_lines = []
+        for i, line in enumerate(lines):
+            if line.startswith('Events:'):
+                in_events = True
+                events_lines.append(line)
+                # Get all remaining lines (events are at the end)
+                events_lines.extend(lines[i+1:])
+                break
+        
+        if events_lines:
+            critical_sections.append("\n=== EVENTS (CRITICAL) ===")
+            critical_sections.extend(events_lines)
+        
+        return '\n'.join(critical_sections)
+    
+    def _parse_logs_output(self, output: str) -> str:
+        """
+        Parse kubectl logs output.
+        Extracts: Error/Warning/Fatal lines + last 20 lines (most recent)
+        """
+        lines = output.split('\n')
+        critical_lines = []
+        
+        # Extract error/warning/fatal/panic lines
+        error_keywords = ['error', 'fatal', 'panic', 'exception', 'failed', 'warning', 'err:']
+        error_lines = []
+        
+        for line in lines:
+            line_lower = line.lower()
+            if any(keyword in line_lower for keyword in error_keywords):
+                error_lines.append(line)
+        
+        if error_lines:
+            critical_lines.append("=== ERRORS/WARNINGS IN LOGS ===")
+            # Limit to first 15 error lines to avoid overwhelming
+            critical_lines.extend(error_lines[:15])
+            if len(error_lines) > 15:
+                critical_lines.append(f"... and {len(error_lines) - 15} more error/warning lines")
+        
+        # Always include last 20 lines (most recent activity)
+        critical_lines.append("\n=== LAST 20 LINES (MOST RECENT) ===")
+        critical_lines.extend(lines[-20:] if len(lines) > 20 else lines)
+        
+        return '\n'.join(critical_lines)
+    
     def _format_findings(self, findings: Dict) -> str:
-        """Format findings for LLM prompt"""
+        """Format findings for LLM prompt with intelligent parsing"""
         formatted = []
         for cmd, result in findings.items():
             if isinstance(result, dict):
-                output = result.get('stdout', result.get('stderr', ''))[:500]
-                formatted.append(f"Command: {cmd}\nOutput: {output}\n")
+                output = result.get('stdout', result.get('stderr', ''))
+                
+                # Use intelligent parsing instead of simple truncation
+                parsed_output = self._extract_critical_sections(cmd, output)
+                
+                formatted.append(f"Command: {cmd}\nOutput:\n{parsed_output}\n")
         return "\n".join(formatted)
     
     def _check_llm_available(self) -> bool:
