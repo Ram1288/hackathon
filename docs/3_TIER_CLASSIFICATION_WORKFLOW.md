@@ -36,7 +36,7 @@
 
 ## 🎯 Intent Detection Logic
 
-### Priority-Based Classification
+### Priority-Based Classification (Corrected Order)
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -44,49 +44,36 @@
 └────────────────────────────┬─────────────────────────────────┘
                              ↓
                 ┌────────────────────────────┐
-                │ Check Informational Words? │ ◄─── Priority 1
-                │ (who, what, which, show,   │
-                │  list, get, describe)      │
+                │ Check ACTION Keywords?     │ ◄─── Priority 1 (HIGHEST)
+                │ (delete, create, scale,    │
+                │  restart, patch, apply)    │
                 └────────┬───────────────────┘
                          │
                     Yes  │  No
                     ┌────┴────┐
                     ↓         ↓
-          ┌─────────────────────────┐
-          │ Has Troubleshooting     │
-          │ Keywords Too?           │
-          └──┬──────────────────┬───┘
-             │                  │
-            Yes                No
-             │                  │
-             ↓                  ↓
-    ┌────────────────┐  ┌──────────────┐
-    │ TROUBLESHOOTING│  │ INFORMATIONAL│
-    └────────────────┘  └──────────────┘
-             ↑
-             │
-        ┌────┴────────────────────┐
-        │ Check Troubleshooting?  │ ◄─── Priority 2
-        │ (debug, fix, why,       │
-        │  error, failing, broken)│
-        └────────┬────────────────┘
-                 │
-            Yes  │  No
-            ┌────┴────┐
-            ↓         ↓
-    ┌────────────┐  ┌─────────────────┐
-    │TROUBLESHOOT│  │ Check Action?   │ ◄─── Priority 3
-    └────────────┘  │ (delete, scale, │
-                    │  create, patch) │
-                    └───┬─────────────┘
-                        │
-                   Yes  │  No
-                   ┌────┴────┐
-                   ↓         ↓
-            ┌──────────┐  ┌──────────────┐
-            │  ACTION  │  │ INFORMATIONAL│ ◄─── Default
-            └──────────┘  │  (Safest)    │
-                          └──────────────┘
+            ┌──────────┐  ┌─────────────────────┐
+            │  ACTION  │  │ Check Troubleshoot? │ ◄─── Priority 2
+            └──────────┘  │ (debug, fix, why,   │
+                          │  error, failing)    │
+                          └───┬─────────────────┘
+                              │
+                         Yes  │  No
+                         ┌────┴────┐
+                         ↓         ↓
+                 ┌────────────┐  ┌──────────────────┐
+                 │TROUBLESHOOT│  │ Check Info?      │ ◄─── Priority 3
+                 └────────────┘  │ (who, what, list,│
+                                 │  show, describe) │
+                                 └───┬──────────────┘
+                                     │
+                                Yes  │  No
+                                ┌────┴────┐
+                                ↓         ↓
+                         ┌──────────────┐  ┌──────────────┐
+                         │ INFORMATIONAL│  │ INFORMATIONAL│ ◄─── Default
+                         └──────────────┘  │  (Safest)    │
+                                           └──────────────┘
 ```
 
 ---
@@ -287,17 +274,27 @@ drain, cordon, uncordon, taint, label, exec, run, expose, port-forward
 
 ## 🔀 Edge Cases & Priority Rules
 
-### Case 1: Mixed Keywords
+### Case 1: Action + Informational Keywords
+```
+Query: "delete which pods are not running"
+       ├─ "delete" → action
+       └─ "which" → informational
+
+Priority: ACTION wins (checked first)
+Result: Execute deletion commands
+```
+
+### Case 2: Informational + Troubleshooting Keywords
 ```
 Query: "list failing pods"
        ├─ "list" → informational
        └─ "failing" → troubleshooting
 
-Priority: troubleshooting (has diagnostic keyword)
+Priority: TROUBLESHOOTING wins (checked before informational)
 Result: Full investigation to find WHY pods are failing
 ```
 
-### Case 2: Pure Informational
+### Case 3: Pure Informational
 ```
 Query: "show me all pods"
        └─ "show" → informational only
@@ -306,7 +303,7 @@ Priority: informational
 Result: Fast path, direct list
 ```
 
-### Case 3: No Keywords
+### Case 4: No Keywords
 ```
 Query: "grafana operator status"
        └─ No keywords detected
@@ -315,14 +312,25 @@ Priority: Default to informational (safest)
 Result: Fast path to show status
 ```
 
-### Case 4: Action + Troubleshooting
+### Case 5: Action + Troubleshooting
 ```
 Query: "delete failing pods"
        ├─ "delete" → action
        └─ "failing" → troubleshooting
 
-Priority: troubleshooting wins (informational check catches "failing" first)
-Result: Investigate which pods are failing, then suggest action
+Priority: ACTION wins (highest priority)
+Result: Execute deletion of failing pods
+```
+
+### Case 6: All Three Keywords
+```
+Query: "delete which pods are failing"
+       ├─ "delete" → action
+       ├─ "which" → informational
+       └─ "failing" → troubleshooting
+
+Priority: ACTION wins (checked first)
+Result: Execute deletion
 ```
 
 ---

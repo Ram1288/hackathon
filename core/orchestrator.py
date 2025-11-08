@@ -147,28 +147,19 @@ class DevDebugOrchestrator:
         """
         Determine query intent with 3-tier classification.
         
+        Priority Order (highest to lowest):
+        1. ACTION - User wants to execute a command (delete, create, scale, etc.)
+        2. TROUBLESHOOTING - User wants to debug/fix a problem (debug, fix, why, error)
+        3. INFORMATIONAL - User wants simple info (who, what, which, show, list)
+        
         Returns:
-            'action' - User wants to execute a command (delete, create, etc.)
-            'informational' - User wants simple info (who, what, which, show, list)
+            'action' - User wants to execute a command
             'troubleshooting' - User wants to debug/fix a problem
+            'informational' - User wants simple info (default)
         """
         query_lower = query.lower()
         
-        # Informational keywords - simple queries (check FIRST - highest priority)
-        informational_keywords = [
-            'who', 'which', 'what', 'show', 'list', 'get', 'describe',
-            'check', 'display', 'print', 'view'
-        ]
-        
-        # Troubleshooting keywords - problem investigation
-        troubleshooting_keywords = [
-            'debug', 'troubleshoot', 'diagnose', 'investigate', 
-            'why', 'how', 'fix', 'resolve', 'solve',
-            'failing', 'failed', 'error', 'issue', 'problem',
-            'not working', 'broken', 'crash'
-        ]
-        
-        # Action keywords - user wants to DO something
+        # Action keywords - user wants to DO something (HIGHEST PRIORITY)
         action_keywords = [
             'delete', 'remove', 'create', 'add', 'apply', 
             'scale', 'restart', 'rollout', 'patch', 'edit',
@@ -176,24 +167,37 @@ class DevDebugOrchestrator:
             'exec', 'run', 'expose', 'port-forward'
         ]
         
-        # Check informational keywords FIRST (highest priority)
-        # "list pods" → informational (unless has troubleshooting words)
-        for keyword in informational_keywords:
-            if keyword in query_lower:
-                # But if it also has troubleshooting words, prefer troubleshooting
-                has_troubleshooting = any(kw in query_lower for kw in troubleshooting_keywords)
-                if not has_troubleshooting:
-                    return 'informational'
+        # Troubleshooting keywords - problem investigation (MEDIUM PRIORITY)
+        troubleshooting_keywords = [
+            'debug', 'troubleshoot', 'diagnose', 'investigate', 
+            'why', 'how', 'fix', 'resolve', 'solve',
+            'failing', 'failed', 'error', 'issue', 'problem',
+            'not working', 'broken', 'crash'
+        ]
         
-        # Check troubleshooting keywords
+        # Informational keywords - simple queries (LOWEST PRIORITY)
+        informational_keywords = [
+            'who', 'which', 'what', 'show', 'list', 'get', 'describe',
+            'check', 'display', 'print', 'view'
+        ]
+        
+        # Check ACTION keywords FIRST (highest priority)
+        # "delete which pods" → action (delete wins over which)
+        for keyword in action_keywords:
+            if keyword in query_lower:
+                return 'action'
+        
+        # Check troubleshooting keywords SECOND
+        # "list failing pods" → troubleshooting (failing wins over list)
         for keyword in troubleshooting_keywords:
             if keyword in query_lower:
                 return 'troubleshooting'
         
-        # Then check for action keywords
-        for keyword in action_keywords:
+        # Check informational keywords LAST
+        # "list pods" → informational (no action/troubleshooting words)
+        for keyword in informational_keywords:
             if keyword in query_lower:
-                return 'action'
+                return 'informational'
         
         # Default to informational (safer than troubleshooting)
         return 'informational'
