@@ -163,16 +163,20 @@ class ExecutionAgent(BaseAgent):
     def _determine_execution_mode(self, request: AgentRequest) -> str:
         """
         Determine execution mode - AI-driven, minimal hardcoding.
+        Supports kubectl, helm, and shell commands.
         """
-        # If AI has generated commands, use kubectl mode
+        # If AI has generated commands, use kubectl mode (handles both kubectl and helm)
         if 'ai_generated_commands' in request.context:
             return 'kubectl'
+        
+        # Check for explicit helm command
+        if 'helm' in request.query.lower():
+            return 'kubectl'  # Use kubectl executor for helm commands too
         
         # Check for explicit kubectl command
         if 'kubectl' in request.query.lower() or 'oc' in request.query.lower():
             return 'kubectl'
         
-        # ❌ REMOVED: Hardcoded shell command list ['ls', 'pwd', 'whoami'...]
         # Use shell mode only if explicitly shell-like (starts with common shell pattern)
         query_stripped = request.query.strip()
         if any(query_stripped.startswith(cmd) for cmd in ['ls', 'cat', 'echo', 'pwd', 'whoami', 'date']):
@@ -182,7 +186,10 @@ class ExecutionAgent(BaseAgent):
         return 'kubectl'
     
     def _execute_kubectl(self, request: AgentRequest) -> Dict:
-        """Execute kubectl commands"""
+        """
+        Execute kubectl and helm commands.
+        Both tools use the same execution pattern - run shell commands and capture output.
+        """
         if not self.k8s_available:
             return {
                 'error': 'kubectl is not available on this system',

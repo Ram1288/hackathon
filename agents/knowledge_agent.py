@@ -33,6 +33,7 @@ class KnowledgeAgent(BaseAgent):
         self.resource_schemas = {}     # Learned via kubectl explain
         self.successful_patterns = []  # Learned from successful troubleshooting
         self.command_capabilities = {} # Discovered kubectl/oc commands
+        self.helm_capabilities = {}    # Discovered helm commands
         
         # Discover environment capabilities
         self._discover_environment()
@@ -51,6 +52,10 @@ class KnowledgeAgent(BaseAgent):
         # Discover kubectl/oc command capabilities
         self.command_capabilities = self._discover_command_capabilities()
         print(f"   ✓ Discovered {len(self.command_capabilities)} command operations")
+        
+        # Discover helm capabilities
+        self.helm_capabilities = self._discover_helm_capabilities()
+        print(f"   ✓ Discovered {len(self.helm_capabilities)} helm commands")
         
         # Load learned patterns from previous sessions
         self._load_learned_patterns()
@@ -133,6 +138,69 @@ class KnowledgeAgent(BaseAgent):
         
         except Exception as e:
             print(f"   ⚠ Could not discover command capabilities: {e}")
+        
+        return {'all_commands': [], 'discovery_method': 'failed'}
+    
+    def _discover_helm_capabilities(self) -> Dict:
+        """
+        Discover Helm command capabilities dynamically.
+        Parse ALL helm subcommands from helm --help without hardcoded categorization.
+        LLM will categorize them based on semantic understanding.
+        """
+        discovered_commands = []
+        
+        # Check if helm is available
+        try:
+            version_check = subprocess.run(
+                ['helm', 'version', '--short'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if version_check.returncode != 0:
+                print(f"   ⚠ Helm not available on this system")
+                return {'all_commands': [], 'discovery_method': 'helm_not_installed'}
+        except Exception as e:
+            print(f"   ⚠ Helm not available: {e}")
+            return {'all_commands': [], 'discovery_method': 'helm_not_installed'}
+        
+        # Discover helm subcommands dynamically
+        try:
+            result = subprocess.run(
+                ['helm', '--help'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if result.returncode == 0:
+                output = result.stdout
+                
+                # Parse ALL available commands from help output
+                import re
+                # Extract command names from help output (e.g., "  install     Install a chart")
+                command_pattern = re.compile(r'^\s{2}([a-z-]+)\s+(.+)$', re.MULTILINE)
+                matches = command_pattern.findall(output)
+                
+                for cmd_name, description in matches:
+                    discovered_commands.append({
+                        'name': cmd_name,
+                        'description': description.strip(),
+                        'tool': 'helm'
+                    })
+                
+                print(f"   ✓ Discovered {len(discovered_commands)} helm commands")
+                
+                # Return raw discovered commands - LLM will categorize them
+                return {
+                    'all_commands': discovered_commands,
+                    'discovery_method': 'helm --help parsing',
+                    'note': 'Helm commands categorized dynamically by LLM based on descriptions'
+                }
+        
+        except Exception as e:
+            print(f"   ⚠ Could not discover helm capabilities: {e}")
         
         return {'all_commands': [], 'discovery_method': 'failed'}
     
@@ -246,6 +314,9 @@ class KnowledgeAgent(BaseAgent):
 **Available kubectl Commands (discovered dynamically via kubectl --help):**
 {self._format_discovered_commands()}
 
+**Available Helm Commands (discovered dynamically via helm --help):**
+{self._format_discovered_helm_commands()}
+
 **Learned Patterns (from past successful resolutions):**
 {self._format_learned_patterns()}
 
@@ -263,6 +334,19 @@ class KnowledgeAgent(BaseAgent):
         formatted = []
         for cmd_info in all_commands[:30]:  # Top 30 most common
             formatted.append(f"  - {cmd_info['name']}: {cmd_info['description']}")
+        
+        return '\n'.join(formatted)
+    
+    def _format_discovered_helm_commands(self) -> str:
+        """Format discovered helm commands for LLM to categorize"""
+        all_commands = self.helm_capabilities.get('all_commands', [])
+        
+        if not all_commands:
+            return "Helm not installed or no commands discovered."
+        
+        formatted = []
+        for cmd_info in all_commands[:20]:  # Top 20 helm commands
+            formatted.append(f"  - helm {cmd_info['name']}: {cmd_info['description']}")
         
         return '\n'.join(formatted)
     

@@ -35,7 +35,7 @@ class LLMAgent(BaseAgent):
         
         # AI-driven prompts with ZERO hardcoded commands/patterns
         self.prompt_templates = {
-            'generate_commands': """You are a Kubernetes expert with deep understanding of cloud-native troubleshooting.
+            'generate_commands': """You are a Kubernetes expert. Generate kubectl or helm commands based on the user query.
 
 **User Query:**
 {query}
@@ -46,114 +46,36 @@ class LLMAgent(BaseAgent):
 
 {dynamic_knowledge}
 
-**QUERY ANALYSIS - Choose the right strategy:**
+**YOUR TASK:**
+Analyze the query and generate appropriate kubectl or helm commands. Return ONLY valid JSON - no explanations, no thinking process, no markdown.
 
-**CASE 1: SPECIFIC RESOURCE QUERY (user mentions specific pod/resource name)**
-Examples: "describe pod grafana-operator-xxx", "get spec of pod xyz", "show deployment abc"
-Strategy: Generate commands for THAT SPECIFIC resource
+**COMMAND GENERATION RULES:**
+1. Extract resource/release names from query → use them exactly in commands (NO placeholders)
+2. Helm queries (releases, charts, install, upgrade) → helm commands
+3. K8s resource queries (pods, deployments, services) → kubectl commands  
+4. For bulk/filtered operations → use --field-selector or -l (labels), NOT placeholders
+5. Apply namespace: -n {namespace} (or --all-namespaces if query specifies)
+6. Maximum 3 commands - each immediately executable
 
-Example Output:
+**OUTPUT FORMAT (return ONLY this, nothing else):**
 {{
   "commands": [
-    {{
-      "cmd": "kubectl describe pod grafana-operator-7894f4648f-tw6gj -n {namespace}",
-      "reason": "Get detailed specification and status of the specific pod"
-    }},
-    {{
-      "cmd": "kubectl get pod grafana-operator-7894f4648f-tw6gj -n {namespace} -o yaml",
-      "reason": "Get complete YAML manifest including spec section"
-    }}
+    {{"cmd": "<your-generated-command>", "reason": "<brief-reason>"}},
+    {{"cmd": "<your-generated-command>", "reason": "<brief-reason>"}}
   ]
 }}
 
-**CASE 2: DISCOVERY/FILTER QUERY (user wants to find/list resources)**
-Examples: "list pods", "show deployments", "which pods are failing"
-Strategy: Use field-selectors and filters to find resources
+**CRITICAL:** Return ONLY the JSON object above. Do NOT include:
+- ❌ Explanations before or after JSON
+- ❌ Markdown code blocks (```json)
+- ❌ Step-by-step thinking process
+- ❌ Multiple JSON objects
+- ❌ Comments in JSON (no // or /* */)
+- ❌ Placeholders like <pod-name>, POD_NAME
 
-Example Output:
-{{
-  "commands": [
-    {{
-      "cmd": "kubectl get pods -n {namespace} -o wide",
-      "reason": "List all pods with detailed information"
-    }}
-  ]
-}}
+Generate commands now:""",
 
-**CASE 3: TROUBLESHOOTING QUERY (user debugging issues)**
-Examples: "pods not running", "debug failing pods", "why pod crashing"
-Strategy: TWO-PHASE approach (discovery first, then detailed diagnostics)
-
-Example Output:
-{{
-  "commands": [
-    {{
-      "cmd": "kubectl get pods -n {namespace} --field-selector=status.phase!=Running -o wide",
-      "reason": "Find all non-running pods with detailed status"
-    }},
-    {{
-      "cmd": "kubectl get events -n {namespace} --sort-by=.lastTimestamp --field-selector=type=Warning",
-      "reason": "Get recent warning events"
-    }}
-  ]
-}}
-
-**CRITICAL RULES:**
-1. ✅ If query mentions a SPECIFIC pod name → use that exact name in kubectl command
-2. ✅ Commands must be executable immediately (no placeholders like <pod-name>)
-3. ✅ For "describe/spec/manifest" queries → use kubectl describe or kubectl get -o yaml
-4. ✅ For "list/show" queries → use kubectl get with appropriate filters
-5. ✅ Maximum 3 commands per request
-6. ❌ NEVER use placeholders like <pod-name>, POD_NAME, etc.
-
-**CRITICAL OUTPUT REQUIREMENTS:**
-1. Return ONLY ONE valid JSON object - no markdown, no code blocks, no explanations
-2. All commands must be in a SINGLE "commands" array
-3. Use double quotes for all strings (not single quotes)
-4. NO COMMENTS in JSON (no //, no /* */)
-5. Escape special characters properly (\\n, \\", \\\\)
-6. ❌ DO NOT return multiple JSON objects - combine all commands into ONE object
-
-**WRONG - Multiple JSON objects (DO NOT DO THIS):**
-{{"commands": [{{"cmd": "kubectl describe pod abc"}}]}}
-{{"commands": [{{"cmd": "kubectl get pod abc -o yaml"}}]}}  ← Second object is WRONG!
-
-**CORRECT - Single JSON object with multiple commands:**
-{{
-  "commands": [
-    {{"cmd": "kubectl describe pod abc -n default", "reason": "Get pod details"}},
-    {{"cmd": "kubectl get pod abc -n default -o yaml", "reason": "Get full YAML spec"}}
-  ]
-}}
-
-**MORE EXAMPLES:**
-
-Specific pod query (2 commands in ONE JSON):
-{{
-  "commands": [
-    {{"cmd": "kubectl describe pod my-pod-123 -n default", "reason": "Get pod details"}},
-    {{"cmd": "kubectl get pod my-pod-123 -n default -o yaml", "reason": "Get full YAML spec"}}
-  ]
-}}
-
-List query (1 command):
-{{
-  "commands": [
-    {{"cmd": "kubectl get pods -n production -o wide", "reason": "List all pods"}}
-  ]
-}}
-
-Filter query (2 commands in ONE JSON):
-{{
-  "commands": [
-    {{"cmd": "kubectl get pods -n staging --field-selector=status.phase!=Running -o wide", "reason": "Find non-running pods"}},
-    {{"cmd": "kubectl get events -n staging --sort-by=.lastTimestamp", "reason": "Check recent events"}}
-  ]
-}}
-
-Now analyze the user query above and generate ONE JSON object with all appropriate kubectl commands:""",
-
-            'generate_action_commands': """You are a Kubernetes expert executing ACTION commands.
+            'generate_action_commands': """You are a Kubernetes expert. Generate ACTION commands (delete, scale, install, upgrade, etc.).
 
 **User Action Request:**
 {query}
@@ -164,46 +86,24 @@ Now analyze the user query above and generate ONE JSON object with all appropria
 
 {dynamic_knowledge}
 
-**ACTION EXECUTION STRATEGY:**
-The user wants to EXECUTE an action (delete, create, scale, etc.), not just investigate.
-Generate commands to discover resources, then execute the action.
+**YOUR TASK:**
+Generate kubectl or helm commands to execute the requested action.
 
-**STEP 1 - DISCOVERY (use simple -o wide, not jsonpath):**
-  * Find non-running pods: kubectl get pods -n {namespace} --field-selector=status.phase!=Running -o wide
-  * Find all pods: kubectl get pods -n {namespace} -o wide
+**KEY PRINCIPLES:**
+- For bulk operations → use --field-selector or -l (labels), NOT placeholders
+- For specific resources → use exact names from query
+- Discovery before destructive actions when helpful
+- Namespace: -n {namespace} (or --all-namespaces if specified)
 
-**STEP 2 - ACTION (use field-selectors when possible):**
-  * Delete non-running pods: kubectl delete pods -n {namespace} --field-selector=status.phase!=Running
-  * Scale deployment: kubectl scale deployment NAME -n {namespace} --replicas=3
-  * Restart deployment: kubectl rollout restart deployment NAME -n {namespace}
-
-**CRITICAL JSON RULES:**
-1. Use ONLY double quotes in JSON
-2. DO NOT use jsonpath output format (causes quote issues)
-3. Use -o wide or -o name instead
-4. NO special characters in cmd field that need escaping
-5. Keep commands simple and executable
-
-**CORRECT OUTPUT (copy this structure exactly):**
+**OUTPUT FORMAT (return ONLY this JSON, nothing else):**
 {{
   "commands": [
-    {{
-      "cmd": "kubectl get pods -n {namespace} --field-selector=status.phase!=Running -o wide",
-      "reason": "Step 1: List non-running pods"
-    }},
-    {{
-      "cmd": "kubectl delete pods -n {namespace} --field-selector=status.phase!=Running",
-      "reason": "Step 2: Delete non-running pods"
-    }}
+    {{"cmd": "<your-command>", "reason": "<why>"}},
+    {{"cmd": "<your-command>", "reason": "<why>"}}
   ]
 }}
 
-**BAD - DO NOT DO THIS:**
-{{"cmd": "kubectl get pods -o jsonpath=\"{{.items[*].name}}\""}}  ← Nested quotes break JSON!
-
-Generate 2 commands in VALID JSON format (discovery + action):
-
-Now generate action commands in VALID JSON format:""",
+Generate executable commands for: {query}""",
             
             'troubleshoot': """You are a Kubernetes and RHEL systems expert. A user has a query about their Kubernetes cluster.
 
@@ -218,9 +118,6 @@ Now generate action commands in VALID JSON format:""",
 
 **Relevant Documentation:**
 {documentation}
-
-**Code Examples Available:**
-{code_examples}
 
 CRITICAL: The investigation agent has already identified the root cause above. Your job is to provide a detailed solution based on that root cause. DO NOT contradict or ignore the investigation findings!
 
@@ -269,7 +166,6 @@ Requirements:
 - Include proper error handling
 - Add helpful comments
 - Make it production-ready
-- Include example usage
 
 Provide ONLY the Python code, well-commented.""",
             
@@ -284,8 +180,7 @@ Provide ONLY the Python code, well-commented.""",
 Provide:
 1. A clear explanation
 2. When and why you would use this
-3. Example usage
-4. Common pitfalls to avoid
+3. Common pitfalls to avoid
 
 Keep the explanation practical and focused.""",
             
@@ -389,7 +284,6 @@ Focus on practical, measurable improvements."""
         # Extract context data
         diagnostics = self._format_diagnostics(request.context.get('diagnostics', {}))
         documentation = self._format_documentation(request.context.get('documentation', []))
-        code_examples = self._format_code_examples(request.context.get('code_examples', {}))
         logs = request.context.get('logs', 'No logs provided')
         context = request.context.get('additional_context', '')
         root_cause = request.context.get('root_cause', 'Investigation in progress...')
@@ -399,7 +293,6 @@ Focus on practical, measurable improvements."""
             query=request.query,
             diagnostics=diagnostics,
             documentation=documentation,
-            code_examples=code_examples,
             logs=logs,
             context=context,
             requirement=request.query,
@@ -438,25 +331,6 @@ Focus on practical, measurable improvements."""
                 f"**{doc.get('filename', 'Unknown')}** (Score: {doc.get('score', 0)}):\n"
                 f"{doc.get('snippet', '')[:300]}"
             )
-        
-        return '\n\n'.join(formatted)
-    
-    def _format_code_examples(self, examples: Dict) -> str:
-        """Format code examples for the prompt"""
-        if not examples or (not examples.get('python') and not examples.get('kubectl')):
-            return "No code examples available."
-        
-        formatted = []
-        
-        if examples.get('python'):
-            formatted.append("**Python Examples:**")
-            for i, example in enumerate(examples['python'][:2], 1):
-                formatted.append(f"```python\n{example[:300]}\n```")
-        
-        if examples.get('kubectl'):
-            formatted.append("\n**Kubectl Examples:**")
-            for i, example in enumerate(examples['kubectl'][:2], 1):
-                formatted.append(f"```bash\n{example[:200]}\n```")
         
         return '\n\n'.join(formatted)
     
@@ -618,12 +492,13 @@ Focus on practical, measurable improvements."""
             
             commands = commands_data.get('commands', [])
             
-            # Replace placeholders with actual values
-            for cmd_obj in commands:
-                if isinstance(cmd_obj, dict) and 'cmd' in cmd_obj:
-                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('<pod-name>', pod_name if pod_name else 'POD_NAME')
-                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('{namespace}', namespace)
-                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('<namespace>', namespace)
+            # AI-First Approach: Detect placeholders and ask LLM to fix them
+            commands_with_placeholders = self._detect_placeholders(commands)
+            
+            if commands_with_placeholders:
+                # LLM generated placeholders - ask it to refine
+                print(f"[AI] Detected placeholders in commands, requesting refinement...")
+                commands = self._refine_commands_with_llm(query, commands, namespace, pod_name)
             
             print(f"[AI] LLM generated {len(commands)} commands dynamically")
             return commands[:5]  # Limit to 5 commands
@@ -665,12 +540,13 @@ Focus on practical, measurable improvements."""
             
             commands = commands_data.get('commands', [])
             
-            # Replace placeholders with actual values
-            for cmd_obj in commands:
-                if isinstance(cmd_obj, dict) and 'cmd' in cmd_obj:
-                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('<pod-name>', pod_name if pod_name else 'POD_NAME')
-                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('{namespace}', namespace)
-                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('<namespace>', namespace)
+            # AI-First Approach: Detect placeholders and ask LLM to fix them
+            commands_with_placeholders = self._detect_placeholders(commands)
+            
+            if commands_with_placeholders:
+                # LLM generated placeholders - ask it to refine
+                print(f"[AI] Detected placeholders in commands, requesting refinement...")
+                commands = self._refine_commands_with_llm(query, commands, namespace, pod_name)
             
             print(f"[AI] LLM generated {len(commands)} action commands (discovery + execution)")
             return commands[:5]  # Limit to 5 commands
@@ -679,6 +555,116 @@ Focus on practical, measurable improvements."""
             raise
         except Exception as e:
             raise AgentProcessingError(f"LLM action command generation failed: {e}")
+    
+    def _detect_placeholders(self, commands: List[Dict]) -> List[Dict]:
+        """
+        AI-First: Detect if LLM generated placeholders instead of actual commands.
+        Returns list of commands containing placeholders.
+        """
+        import re
+        placeholder_patterns = [
+            r'<[^>]+>',                    # <pod-name>, <pod-names>, <release-name>
+            r'\{[^}]+\}',                  # {pod_name}, {release}
+            r'\$[A-Z_]+',                  # $POD_NAME
+            r'\b[A-Z_]{3,}\b',             # POD_NAME, RELEASE_NAME (word boundary)
+            r'\bPOD[_-]?NAMES?\b',         # POD_NAME, POD-NAME, POD_NAMES
+            r'\bRELEASE[_-]?NAMES?\b',     # RELEASE_NAME, RELEASE-NAME
+        ]
+        
+        commands_with_placeholders = []
+        for cmd_obj in commands:
+            cmd = cmd_obj.get('cmd', '')
+            for pattern in placeholder_patterns:
+                if re.search(pattern, cmd, re.IGNORECASE):
+                    print(f"[DEBUG] Placeholder detected in: {cmd}")
+                    commands_with_placeholders.append(cmd_obj)
+                    break
+        
+        return commands_with_placeholders
+    
+    def _refine_commands_with_llm(self, original_query: str, commands: List[Dict], namespace: str, pod_name: str) -> List[Dict]:
+        """
+        AI-First: Ask LLM to refine commands that contain placeholders.
+        Let LLM reason about the correct approach using its training knowledge.
+        """
+        refinement_prompt = f"""You generated commands with PLACEHOLDERS. Fix them.
+
+Query: "{original_query}"
+Namespace: {namespace}
+
+Your output has placeholders (like <pod-names>, POD_NAME, etc):
+{json.dumps(commands, indent=2)}
+
+ISSUE: Placeholders cannot be executed. Commands must be immediately runnable.
+
+TASK: Regenerate as executable commands. Use your kubectl expertise to:
+- For bulk operations → use --field-selector or -l (label selectors)
+- For specific resources → extract actual names from the query
+- Ensure all commands can run without manual replacement
+
+Return ONLY JSON:
+{{
+  "commands": [
+    {{"cmd": "executable-command", "reason": "why"}},
+    {{"cmd": "executable-command", "reason": "why"}}
+  ]
+}}"""
+        
+        try:
+            response_text = self._query_ollama(refinement_prompt, max_tokens=1000)
+            refined_data = self._extract_and_validate_json(response_text)
+            
+            if refined_data and 'commands' in refined_data:
+                # Verify no placeholders in refined commands
+                still_has_placeholders = self._detect_placeholders(refined_data['commands'])
+                if still_has_placeholders:
+                    print(f"[AI] ⚠️  Refinement still has placeholders! Filtering them out...")
+                    return self._fallback_placeholder_removal(commands, namespace, original_query)
+                
+                print(f"[AI] ✓ Successfully refined {len(refined_data['commands'])} commands")
+                return refined_data['commands']
+            else:
+                print(f"[AI] Refinement returned invalid JSON, filtering placeholders...")
+                return self._fallback_placeholder_removal(commands, namespace, original_query)
+                
+        except Exception as e:
+            print(f"[AI] Refinement error: {e}, filtering placeholders...")
+            return self._fallback_placeholder_removal(commands, namespace, original_query)
+    
+    def _fallback_placeholder_removal(self, commands: List[Dict], namespace: str, query: str) -> List[Dict]:
+        """
+        TRUE AI-FIRST: If LLM refinement fails, we don't fall back to hardcoded patterns.
+        Instead, we filter out placeholder commands and return only safe, executable ones.
+        If nothing is executable, return empty list - forcing user to rephrase.
+        """
+        import re
+        
+        print(f"[AI] ⚠️  LLM refinement failed. Filtering placeholder commands...")
+        
+        # Simply remove commands with placeholders - don't hardcode replacements
+        safe_commands = []
+        for cmd_obj in commands:
+            cmd = cmd_obj.get('cmd', '')
+            
+            # Check if command has placeholders
+            has_placeholder = re.search(
+                r'<[^>]+>|\{[^}]+\}|\$[A-Z_]+|\b[A-Z_]{3,}\b',
+                cmd
+            )
+            
+            if not has_placeholder:
+                # Command is safe and executable as-is
+                safe_commands.append(cmd_obj)
+                print(f"[AI] ✓ Keeping executable command: {cmd}")
+            else:
+                # Command has placeholders - skip it
+                print(f"[AI] ✗ Skipping command with placeholder: {cmd}")
+        
+        if not safe_commands:
+            print(f"[AI] ⚠️  No executable commands available. LLM needs better guidance.")
+            print(f"[AI] Suggestion: User should rephrase query with more specific details.")
+        
+        return safe_commands
     
     def learn_from_resolution(self, query: str, commands_executed: List[str], outcome: str):
         """
