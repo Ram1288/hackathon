@@ -343,19 +343,28 @@ class DevDebugOrchestrator:
             cmd = cmd_obj['cmd']
             print(f"   ▶ {cmd}")
             
+            # IMPORTANT: Pass commands in context as 'ai_generated_commands'
+            # The execution agent expects this format
             exec_request = AgentRequest(
-                query=cmd,
-                context={'namespace': namespace},
+                query=query,  # Original user query
+                context={
+                    'namespace': namespace,
+                    'ai_generated_commands': [cmd_obj]  # Pass as AI-generated command
+                },
                 metadata={'command_type': 'kubectl'},
                 session_id=session_id
             )
             exec_response = self.agents['execution'].process(exec_request)
             
             if exec_response.success:
-                output = exec_response.data.get('stdout', '')
+                # Execution agent returns: {cmd: {stdout, stderr, returncode}}
+                cmd_result = exec_response.data.get(cmd, exec_response.data)
+                output = cmd_result.get('stdout', '')
                 if output:
                     print(f"      ✓ {output[:100]}...")
-                execution_results[cmd] = exec_response.data
+                else:
+                    print(f"      ✓ Command executed")
+                execution_results[cmd] = cmd_result
             else:
                 print(f"      ✗ {exec_response.error}")
                 execution_results[cmd] = {'error': exec_response.error}
