@@ -516,14 +516,24 @@ Output JSON:
                 import re
                 json_match = re.search(r'\{.+\}', response, re.DOTALL)
                 if json_match:
-                    solution_data = json.loads(json_match.group())
-                    return {
-                        'root_cause': solution_data.get('root_cause', latest.hypothesis),
-                        'confidence': latest.confidence,
-                        'solution': solution_data.get('solution', 'See diagnostic output'),
-                        'verification': solution_data.get('verification', ''),
-                        'prevention': solution_data.get('prevention', '')
-                    }
+                    json_str = json_match.group()
+                    
+                    # Sanitize JSON string - remove invalid control characters
+                    # Replace control chars (except \n, \r, \t) with spaces
+                    json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', json_str)
+                    
+                    try:
+                        solution_data = json.loads(json_str)
+                        return {
+                            'root_cause': solution_data.get('root_cause', latest.hypothesis),
+                            'confidence': latest.confidence,
+                            'solution': solution_data.get('solution', 'See diagnostic output'),
+                            'verification': solution_data.get('verification', ''),
+                            'prevention': solution_data.get('prevention', '')
+                        }
+                    except json.JSONDecodeError as je:
+                        print(f"   ⚠️  JSON parsing failed after sanitization: {je}")
+                        # Continue to fallback
             except Exception as e:
                 print(f"   ⚠️  Final LLM analysis failed: {e}")
         

@@ -484,6 +484,9 @@ Focus on practical, measurable improvements."""
             print(f"[DEBUG] Attempting to fix truncated JSON...")
         
         # Step 3: Clean up common LLM JSON issues
+        # Remove invalid control characters (except \n, \r, \t)
+        json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', json_str)
+        
         # Remove single-line comments (// ...)
         json_str = re.sub(r'//[^\n]*', '', json_str)
         
