@@ -46,69 +46,97 @@ class LLMAgent(BaseAgent):
 
 {dynamic_knowledge}
 
-**CRITICAL DIAGNOSTIC STRATEGY:**
-When debugging issues (like "pods not running"), you MUST use a TWO-PHASE approach:
+**QUERY ANALYSIS - Choose the right strategy:**
 
-**PHASE 1 - DISCOVERY (always first):**
-- List/find the problematic resources with specific selectors
-- Use --field-selector, -l (labels), or -o (output format) to filter
-- Examples:
-  * Find non-running pods: `kubectl get pods -n {namespace} --field-selector=status.phase!=Running -o wide`
-  * Find failed pods: `kubectl get pods -n {namespace} --field-selector=status.phase=Failed`
-  * List all events: `kubectl get events -n {namespace} --sort-by=.lastTimestamp`
+**CASE 1: SPECIFIC RESOURCE QUERY (user mentions specific pod/resource name)**
+Examples: "describe pod grafana-operator-xxx", "get spec of pod xyz", "show deployment abc"
+Strategy: Generate commands for THAT SPECIFIC resource
 
-**PHASE 2 - DETAILED DIAGNOSTICS (after discovery):**
-- Use the discovered resource names in detailed commands
-- If you don't know specific names yet, use `-o jsonpath` to extract them
-- Examples (these commands will be generated LATER with actual names):
-  * `kubectl describe pod <specific-pod-name> -n {namespace}`
-  * `kubectl logs <specific-pod-name> -n {namespace} --tail=50`
-
-**For THIS request, generate ONLY Phase 1 (discovery) commands!**
-The system will parse results and generate Phase 2 commands automatically.
-
-**CRITICAL RULES:**
-1. ❌ NEVER use placeholders in Phase 1 commands
-2. ✅ Use field-selectors, labels, output formats to find resources
-3. ✅ Commands must be immediately executable without substitution
-4. ✅ Maximum 3 discovery commands per request
-5. ✅ Use ONLY resources discovered in this environment (see above)
-
-**CRITICAL OUTPUT REQUIREMENTS:**
-1. Return ONLY valid JSON - no markdown, no code blocks, no explanations
-2. Use double quotes for all strings (not single quotes)
-3. NO COMMENTS in JSON (no //, no /* */) - JSON does not support comments!
-4. Escape special characters properly (\\n, \\", \\\\)
-5. Each command must be executable as-is (no placeholders)
-
-**EXACT OUTPUT FORMAT:**
+Example Output:
 {{
   "commands": [
     {{
-      "cmd": "kubectl get pods -n {namespace} --field-selector=status.phase!=Running -o wide",
-      "reason": "Find all non-running pods with detailed status information"
+      "cmd": "kubectl describe pod grafana-operator-7894f4648f-tw6gj -n {namespace}",
+      "reason": "Get detailed specification and status of the specific pod"
     }},
     {{
-      "cmd": "kubectl get events -n {namespace} --sort-by=.lastTimestamp --field-selector=type=Warning",
-      "reason": "Get recent warning events that might explain pod failures"
+      "cmd": "kubectl get pod grafana-operator-7894f4648f-tw6gj -n {namespace} -o yaml",
+      "reason": "Get complete YAML manifest including spec section"
     }}
   ]
 }}
 
-**GOOD Examples (Phase 1 discovery):**
+**CASE 2: DISCOVERY/FILTER QUERY (user wants to find/list resources)**
+Examples: "list pods", "show deployments", "which pods are failing"
+Strategy: Use field-selectors and filters to find resources
+
+Example Output:
 {{
   "commands": [
-    {{"cmd": "kubectl get pods -n production --field-selector=status.phase!=Running -o jsonpath='{{.items[*].metadata.name}}'", "reason": "List non-running pod names"}},
-    {{"cmd": "kubectl get events -n production --sort-by=.lastTimestamp", "reason": "Check recent events"}}
+    {{
+      "cmd": "kubectl get pods -n {namespace} -o wide",
+      "reason": "List all pods with detailed information"
+    }}
   ]
 }}
 
-**BAD Examples (DO NOT DO THIS):**
-❌ {{"cmd": "kubectl describe pod <pod-name> -n default"}} - has placeholder!
-❌ {{"cmd": "kubectl logs POD_NAME"}} - has placeholder!
-❌ // {{"cmd": "kubectl get pods"}} - has comment!
+**CASE 3: TROUBLESHOOTING QUERY (user debugging issues)**
+Examples: "pods not running", "debug failing pods", "why pod crashing"
+Strategy: TWO-PHASE approach (discovery first, then detailed diagnostics)
 
-Now generate Phase 1 (discovery) commands in VALID JSON format:""",
+Example Output:
+{{
+  "commands": [
+    {{
+      "cmd": "kubectl get pods -n {namespace} --field-selector=status.phase!=Running -o wide",
+      "reason": "Find all non-running pods with detailed status"
+    }},
+    {{
+      "cmd": "kubectl get events -n {namespace} --sort-by=.lastTimestamp --field-selector=type=Warning",
+      "reason": "Get recent warning events"
+    }}
+  ]
+}}
+
+**CRITICAL RULES:**
+1. ✅ If query mentions a SPECIFIC pod name → use that exact name in kubectl command
+2. ✅ Commands must be executable immediately (no placeholders like <pod-name>)
+3. ✅ For "describe/spec/manifest" queries → use kubectl describe or kubectl get -o yaml
+4. ✅ For "list/show" queries → use kubectl get with appropriate filters
+5. ✅ Maximum 3 commands per request
+6. ❌ NEVER use placeholders like <pod-name>, POD_NAME, etc.
+
+**CRITICAL OUTPUT REQUIREMENTS:**
+1. Return ONLY valid JSON - no markdown, no code blocks, no explanations
+2. Use double quotes for all strings (not single quotes)
+3. NO COMMENTS in JSON (no //, no /* */)
+4. Escape special characters properly (\\n, \\", \\\\)
+
+**CORRECT FORMAT EXAMPLES:**
+
+Specific pod query:
+{{
+  "commands": [
+    {{"cmd": "kubectl describe pod my-pod-123 -n default", "reason": "Get pod details"}},
+    {{"cmd": "kubectl get pod my-pod-123 -n default -o yaml", "reason": "Get full YAML spec"}}
+  ]
+}}
+
+List query:
+{{
+  "commands": [
+    {{"cmd": "kubectl get pods -n production -o wide", "reason": "List all pods"}}
+  ]
+}}
+
+Filter query:
+{{
+  "commands": [
+    {{"cmd": "kubectl get pods -n staging --field-selector=status.phase!=Running -o wide", "reason": "Find non-running pods"}}
+  ]
+}}
+
+Now analyze the user query above and generate appropriate kubectl commands in VALID JSON format:""",
 
             'generate_action_commands': """You are a Kubernetes expert executing ACTION commands.
 
