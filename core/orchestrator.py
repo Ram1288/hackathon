@@ -157,6 +157,8 @@ class DevDebugOrchestrator:
             'troubleshooting' - User wants to debug/fix a problem
             'informational' - User wants simple info (default)
         """
+        import re
+        
         query_lower = query.lower()
         
         # Action keywords - user wants to DO something (HIGHEST PRIORITY)
@@ -181,23 +183,30 @@ class DevDebugOrchestrator:
             'check', 'display', 'print', 'view'
         ]
         
+        # Helper function to check for word boundaries
+        def has_keyword(keywords, text):
+            for keyword in keywords:
+                # Use word boundaries to avoid false positives like "run" in "running"
+                pattern = r'\b' + re.escape(keyword) + r'\b'
+                if re.search(pattern, text):
+                    return True
+            return False
+        
         # Check ACTION keywords FIRST (highest priority)
         # "delete which pods" → action (delete wins over which)
-        for keyword in action_keywords:
-            if keyword in query_lower:
-                return 'action'
+        if has_keyword(action_keywords, query_lower):
+            return 'action'
         
         # Check troubleshooting keywords SECOND
+        # "debug pods" → troubleshooting
         # "list failing pods" → troubleshooting (failing wins over list)
-        for keyword in troubleshooting_keywords:
-            if keyword in query_lower:
-                return 'troubleshooting'
+        if has_keyword(troubleshooting_keywords, query_lower):
+            return 'troubleshooting'
         
         # Check informational keywords LAST
         # "list pods" → informational (no action/troubleshooting words)
-        for keyword in informational_keywords:
-            if keyword in query_lower:
-                return 'informational'
+        if has_keyword(informational_keywords, query_lower):
+            return 'informational'
         
         # Default to informational (safer than troubleshooting)
         return 'informational'
