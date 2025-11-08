@@ -107,14 +107,28 @@ Example Output:
 6. ❌ NEVER use placeholders like <pod-name>, POD_NAME, etc.
 
 **CRITICAL OUTPUT REQUIREMENTS:**
-1. Return ONLY valid JSON - no markdown, no code blocks, no explanations
-2. Use double quotes for all strings (not single quotes)
-3. NO COMMENTS in JSON (no //, no /* */)
-4. Escape special characters properly (\\n, \\", \\\\)
+1. Return ONLY ONE valid JSON object - no markdown, no code blocks, no explanations
+2. All commands must be in a SINGLE "commands" array
+3. Use double quotes for all strings (not single quotes)
+4. NO COMMENTS in JSON (no //, no /* */)
+5. Escape special characters properly (\\n, \\", \\\\)
+6. ❌ DO NOT return multiple JSON objects - combine all commands into ONE object
 
-**CORRECT FORMAT EXAMPLES:**
+**WRONG - Multiple JSON objects (DO NOT DO THIS):**
+{{"commands": [{{"cmd": "kubectl describe pod abc"}}]}}
+{{"commands": [{{"cmd": "kubectl get pod abc -o yaml"}}]}}  ← Second object is WRONG!
 
-Specific pod query:
+**CORRECT - Single JSON object with multiple commands:**
+{{
+  "commands": [
+    {{"cmd": "kubectl describe pod abc -n default", "reason": "Get pod details"}},
+    {{"cmd": "kubectl get pod abc -n default -o yaml", "reason": "Get full YAML spec"}}
+  ]
+}}
+
+**MORE EXAMPLES:**
+
+Specific pod query (2 commands in ONE JSON):
 {{
   "commands": [
     {{"cmd": "kubectl describe pod my-pod-123 -n default", "reason": "Get pod details"}},
@@ -122,21 +136,22 @@ Specific pod query:
   ]
 }}
 
-List query:
+List query (1 command):
 {{
   "commands": [
     {{"cmd": "kubectl get pods -n production -o wide", "reason": "List all pods"}}
   ]
 }}
 
-Filter query:
+Filter query (2 commands in ONE JSON):
 {{
   "commands": [
-    {{"cmd": "kubectl get pods -n staging --field-selector=status.phase!=Running -o wide", "reason": "Find non-running pods"}}
+    {{"cmd": "kubectl get pods -n staging --field-selector=status.phase!=Running -o wide", "reason": "Find non-running pods"}},
+    {{"cmd": "kubectl get events -n staging --sort-by=.lastTimestamp", "reason": "Check recent events"}}
   ]
 }}
 
-Now analyze the user query above and generate appropriate kubectl commands in VALID JSON format:""",
+Now analyze the user query above and generate ONE JSON object with all appropriate kubectl commands:""",
 
             'generate_action_commands': """You are a Kubernetes expert executing ACTION commands.
 
