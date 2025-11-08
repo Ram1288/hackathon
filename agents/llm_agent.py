@@ -72,6 +72,12 @@ Analyze the query and generate appropriate kubectl or helm commands. Return ONLY
 - ❌ Multiple JSON objects
 - ❌ Comments in JSON (no // or /* */)
 - ❌ Placeholders like <pod-name>, POD_NAME
+- ❌ Unescaped quotes in commands (use single quotes for shell/jq filters)
+
+**JSON FORMATTING:**
+- For jq/shell commands: use SINGLE quotes to avoid escaping
+- GOOD: "kubectl get pods -o json | jq '.items[]'"
+- BAD: "kubectl get pods -o json | jq ".items[]"" (breaks JSON!)
 
 Generate commands now:""",
 
@@ -95,6 +101,20 @@ Generate kubectl or helm commands to execute the requested action.
 - Discovery before destructive actions when helpful
 - Namespace: -n {namespace} (or --all-namespaces if specified)
 
+**SEMANTIC UNDERSTANDING (CRITICAL):**
+- "not running" = ANY status except Running (includes: Failed, Succeeded, Unknown, Pending, Error, etc.)
+- "failed" = Only Failed phase
+- "completed" = Only Succeeded phase
+- "errors" = Look at container status, not pod phase
+- Use kubectl field-selector logic, not assumptions
+
+**KUBERNETES POD PHASES:**
+- Running: Pod is running (but containers may have errors!)
+- Pending: Pod accepted but not started
+- Succeeded: All containers terminated successfully
+- Failed: All containers terminated, at least one failed
+- Unknown: Pod state unknown
+
 **OUTPUT FORMAT (return ONLY this JSON, nothing else):**
 {{
   "commands": [
@@ -102,6 +122,12 @@ Generate kubectl or helm commands to execute the requested action.
     {{"cmd": "<your-command>", "reason": "<why>"}}
   ]
 }}
+
+**JSON FORMATTING RULES:**
+- Escape quotes inside command strings: use single quotes for shell commands or escape with \\
+- Example GOOD: {{"cmd": "kubectl get pods -o json | jq '.items[]'"}}
+- Example BAD: {{"cmd": "kubectl get pods -o json | jq ".items[]""}} (unescaped quotes)
+- Use single quotes for jq/shell filters to avoid JSON escaping issues
 
 Generate executable commands for: {query}""",
             
@@ -413,12 +439,6 @@ Focus on practical, measurable improvements."""
         # Fix trailing commas before } or ]
         json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
         
-        # Fix single quotes to double quotes (some LLMs do this)
-        json_str = re.sub(r"(?<!\\)'", '"', json_str)
-        
-        # Fix unescaped newlines in strings
-        json_str = re.sub(r'(?<!\\)\n(?=[^"]*"[^"]*:)', '\\n', json_str)
-        
         # Step 4: Try to parse
         try:
             data = json.loads(json_str)
@@ -560,25 +580,47 @@ Focus on practical, measurable improvements."""
         """
         AI-First: Detect if LLM generated placeholders instead of actual commands.
         Returns list of commands containing placeholders.
+        
+        CRITICAL: Only detect ACTUAL placeholders, not valid kubectl arguments.
+        Valid: --field-selector status.phase=Failed (kubectl enum value)
+        Invalid: <pod-name>, POD_NAME, {release} (placeholder variables)
         """
         import re
+        
+        # Whitelist: Valid kubectl/helm enum values and common command words
+        # These are NOT placeholders - they're legitimate K8s API values
+        valid_k8s_terms = r'\b(Failed|Unknown|Succeeded|Running|Pending|Error|CrashLoopBackOff|ImagePullBackOff|Completed|Terminating|READY|STATUS|AGE|NAME|NAMESPACE)\b'
+        
         placeholder_patterns = [
             r'<[^>]+>',                    # <pod-name>, <pod-names>, <release-name>
-            r'\{[^}]+\}',                  # {pod_name}, {release}
-            r'\$[A-Z_]+',                  # $POD_NAME
-            r'\b[A-Z_]{3,}\b',             # POD_NAME, RELEASE_NAME (word boundary)
-            r'\bPOD[_-]?NAMES?\b',         # POD_NAME, POD-NAME, POD_NAMES
+            r'\{[^}]+\}',                  # {pod_name}, {release} (not JSON output format)
+            r'\$[A-Z_][A-Z_0-9]*',         # $POD_NAME, $RELEASE (shell variables)
+            r'\bPOD[_-]?NAMES?\b',         # POD_NAME, POD-NAME, POD_NAMES (obvious placeholders)
             r'\bRELEASE[_-]?NAMES?\b',     # RELEASE_NAME, RELEASE-NAME
+            r'\bNAMESPACE_NAME\b',         # NAMESPACE_NAME
+            r'\bDEPLOYMENT[_-]?NAME\b',    # DEPLOYMENT_NAME
         ]
         
         commands_with_placeholders = []
         for cmd_obj in commands:
             cmd = cmd_obj.get('cmd', '')
-            for pattern in placeholder_patterns:
-                if re.search(pattern, cmd, re.IGNORECASE):
-                    print(f"[DEBUG] Placeholder detected in: {cmd}")
-                    commands_with_placeholders.append(cmd_obj)
-                    break
+            
+            # First check if it's a valid K8s term
+            if re.search(valid_k8s_terms, cmd, re.IGNORECASE):
+                # Command contains valid K8s enum values - check more carefully
+                # Only flag if it has OBVIOUS placeholders
+                for pattern in placeholder_patterns[:3]:  # Only check <>, {}, $ patterns
+                    if re.search(pattern, cmd):
+                        print(f"[DEBUG] Placeholder detected in: {cmd}")
+                        commands_with_placeholders.append(cmd_obj)
+                        break
+            else:
+                # No K8s terms - apply all patterns
+                for pattern in placeholder_patterns:
+                    if re.search(pattern, cmd, re.IGNORECASE):
+                        print(f"[DEBUG] Placeholder detected in: {cmd}")
+                        commands_with_placeholders.append(cmd_obj)
+                        break
         
         return commands_with_placeholders
     
@@ -636,24 +678,42 @@ Return ONLY JSON:
         TRUE AI-FIRST: If LLM refinement fails, we don't fall back to hardcoded patterns.
         Instead, we filter out placeholder commands and return only safe, executable ones.
         If nothing is executable, return empty list - forcing user to rephrase.
+        
+        Uses SAME logic as _detect_placeholders to avoid false positives.
         """
         import re
         
         print(f"[AI] ⚠️  LLM refinement failed. Filtering placeholder commands...")
         
-        # Simply remove commands with placeholders - don't hardcode replacements
+        # Whitelist: Valid kubectl/helm values (not placeholders)
+        valid_k8s_terms = r'\b(Failed|Unknown|Succeeded|Running|Pending|Error|CrashLoopBackOff|ImagePullBackOff|Completed|Terminating|READY|STATUS|AGE|NAME|NAMESPACE)\b'
+        
+        # Actual placeholder patterns
+        obvious_placeholders = [
+            r'<[^>]+>',                    # <pod-name>, <release-name>
+            r'\{[^}]+\}',                  # {pod_name}, {release}
+            r'\$[A-Z_][A-Z_0-9]*',         # $POD_NAME, $RELEASE
+            r'\bPOD[_-]?NAMES?\b',         # POD_NAME, POD-NAME
+            r'\bRELEASE[_-]?NAMES?\b',     # RELEASE_NAME
+            r'\bNAMESPACE_NAME\b',
+            r'\bDEPLOYMENT[_-]?NAME\b',
+        ]
+        
         safe_commands = []
         for cmd_obj in commands:
             cmd = cmd_obj.get('cmd', '')
             
-            # Check if command has placeholders
-            has_placeholder = re.search(
-                r'<[^>]+>|\{[^}]+\}|\$[A-Z_]+|\b[A-Z_]{3,}\b',
-                cmd
-            )
+            # Check for OBVIOUS placeholders only
+            has_placeholder = False
+            for pattern in obvious_placeholders:
+                if re.search(pattern, cmd, re.IGNORECASE):
+                    # But exclude valid K8s enum values
+                    if not (pattern == obvious_placeholders[1] and '-o jsonpath=' in cmd):  # Allow JSONPath
+                        has_placeholder = True
+                        break
             
             if not has_placeholder:
-                # Command is safe and executable as-is
+                # Command is safe and executable
                 safe_commands.append(cmd_obj)
                 print(f"[AI] ✓ Keeping executable command: {cmd}")
             else:
