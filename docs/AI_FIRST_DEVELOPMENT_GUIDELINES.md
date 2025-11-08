@@ -345,6 +345,41 @@ obvious_placeholders = [
 - **Pod Phases**: Pending, Running, Succeeded, Failed, Unknown
 - **Container Statuses**: Waiting, Running, Terminated (with reasons like CreateContainerConfigError)
 - Pod can be "Running" phase but have container errors (CreateContainerConfigError, CrashLoopBackOff)
+- **Pod can be "Pending" phase but have CreateContainerConfigError (NOT RUNNING but NOT Failed!)**
+
+**Real Example** (User's actual case):
+```bash
+$ oc get pods -n nm-cal-observability
+NAME                                READY   STATUS                       RESTARTS   AGE
+grafana-operator-7894f4648f-dq7b7   0/1     CreateContainerConfigError   0          8m5s
+
+$ kubectl describe pod grafana-operator-7894f4648f-dq7b7
+Status:           Pending  # ← NOT Failed!
+State:            Waiting
+  Reason:         CreateContainerConfigError
+Events:
+  Warning  Failed  Error: container has runAsNonRoot and image will run as root
+```
+
+**What LLM Did** (WRONG):
+```bash
+# ❌ Only checked Failed phase - MISSED the Pending pods with errors!
+kubectl get pods --field-selector=status.phase=Failed
+```
+
+**What LLM Should Do** (CORRECT):
+```bash
+# ✅ First: Get ALL pods and check STATUS column (shows real state)
+kubectl get pods -n nm-cal-observability
+
+# ✅ Then: Describe pods where READY != 1/1
+kubectl get pods -n nm-cal-observability -o json | \
+  jq -r '.items[] | select(.status.containerStatuses[]?.ready == false) | .metadata.name' | \
+  xargs kubectl describe pod -n nm-cal-observability
+
+# ✅ Or simply: Check all non-Running phases
+kubectl get pods --field-selector='status.phase!=Running' -n nm-cal-observability
+```
 
 **Wrong Interpretation** (what LLM did):
 ```bash

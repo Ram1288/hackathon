@@ -57,6 +57,17 @@ Analyze the query and generate appropriate kubectl or helm commands. Return ONLY
 5. Apply namespace: -n {namespace} (or --all-namespaces if query specifies)
 6. Maximum 3 commands - each immediately executable
 
+**CRITICAL - "NOT RUNNING" QUERIES:**
+- "not running" / "debug" / "troubleshoot" = Check READY column, not just phase
+- Step 1: kubectl get pods -n <ns> (shows real STATUS: CreateContainerConfigError, CrashLoopBackOff, etc.)
+- Step 2: kubectl describe pods <pod-name> -n <ns> (for non-ready pods)
+- Don't ONLY check status.phase=Failed (misses Pending with CreateContainerConfigError!)
+
+**POD REALITY:**
+- Pending + CreateContainerConfigError = NOT RUNNING (but phase != Failed!)
+- Running + CrashLoopBackOff = RUNNING but NOT HEALTHY
+- Check READY column: 0/1 = not running, regardless of phase
+
 **OUTPUT FORMAT (return ONLY this, nothing else):**
 {{
   "commands": [
@@ -102,18 +113,35 @@ Generate kubectl or helm commands to execute the requested action.
 - Namespace: -n {namespace} (or --all-namespaces if specified)
 
 **SEMANTIC UNDERSTANDING (CRITICAL):**
-- "not running" = ANY status except Running (includes: Failed, Succeeded, Unknown, Pending, Error, etc.)
-- "failed" = Only Failed phase
-- "completed" = Only Succeeded phase
-- "errors" = Look at container status, not pod phase
-- Use kubectl field-selector logic, not assumptions
+- "not running" / "debug not running" = Check ALL pods where READY != 1/1 (comprehensive approach)
+  - Use: kubectl get pods --field-selector=status.phase!=Running OR check READY column
+  - Includes: Pending with errors, Failed, CrashLoopBackOff, CreateContainerConfigError, ImagePullBackOff
+- "failed" = Only Failed phase (specific)
+- "completed" = Only Succeeded phase (specific)  
+- "errors" / "container errors" = Look at container status and pod events, not just phase
+
+**CRITICAL - POD REALITY:**
+- Pod can be Pending phase but have CreateContainerConfigError (NOT RUNNING but not Failed!)
+- Pod can be Running phase but container is CrashLoopBackOff (RUNNING but not healthy!)
+- ALWAYS check READY column (0/1 = not running, regardless of phase)
+- For "not running" queries: Check status.phase AND containerStatuses
 
 **KUBERNETES POD PHASES:**
 - Running: Pod is running (but containers may have errors!)
-- Pending: Pod accepted but not started
+- Pending: Pod accepted but not started (CHECK THIS for "not running"!)
 - Succeeded: All containers terminated successfully
 - Failed: All containers terminated, at least one failed
 - Unknown: Pod state unknown
+
+**BEST PRACTICE for "not running" / "debug" queries:**
+1. First: kubectl get pods -n <ns> (see STATUS column - shows real state!)
+2. Then: kubectl describe pods with non-Running status
+3. Check events and container states
+
+**AVOID:**
+- ❌ Only checking status.phase=Failed (misses Pending with errors!)
+- ❌ Ignoring READY column (0/1 means not running!)
+- ❌ Not checking pod events (shows CreateContainerConfigError, etc.)
 
 **OUTPUT FORMAT (return ONLY this JSON, nothing else):**
 {{
