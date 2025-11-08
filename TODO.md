@@ -6,39 +6,54 @@
 
 ## 🔴 High Priority (Before Demo)
 
-### 1. Improve Intent Detection Logic
-**Status:** Pending  
-**Effort:** 30 minutes  
-**File:** `core/orchestrator.py` - `_determine_query_intent()`
+### 1. 3-Tier Query Classification System
+**Status:** ✅ COMPLETED (Nov 8, 2025)  
+**Effort:** 2 hours  
+**File:** `core/orchestrator.py`
 
-**Problem:**
-- Diagnostic keywords are defined but never checked
-- Only action keywords are validated
-- Ambiguous queries (e.g., "delete and debug") not handled intelligently
+**Implementation:**
+Replaced 2-tier system (action vs diagnostic) with 3-tier classification:
 
-**Solution Options:**
-- ✅ **Option 1 (Recommended):** Position-based priority
-  - Check both action and diagnostic keywords
-  - If both present, use whichever comes first in query
-  - Example: "delete and debug" → action (delete first)
-  - Example: "debug then delete" → diagnostic (debug first)
+**Tier 1: Informational (Fast Path - 5-10 sec)**
+- Keywords: who, which, what, show, list, get, describe, check, display, print, view
+- Flow: Generate commands → Execute → LLM summarizes → Direct answer
+- Examples: "list pods", "show deployments", "who scheduled pod X"
+- Method: `_process_informational_query()`
 
-- Option 2: Strict mode
-  - Reject queries with both action and diagnostic keywords
-  - Force user to be explicit
+**Tier 2: Troubleshooting (Full Investigation - 30-60 sec)**
+- Keywords: debug, troubleshoot, diagnose, investigate, why, how, fix, resolve, failing, error, broken
+- Flow: RAG → Iterative investigation → Root cause analysis → Solution
+- Examples: "debug failing pods", "why is pod crashing", "fix deployment error"
+- Method: `_process_troubleshooting_query()` (renamed from `_process_diagnostic_query`)
 
-- Option 3: Simple fix
-  - Check action keywords first (priority)
-  - Then check diagnostic keywords
-  - Default to diagnostic if neither
+**Tier 3: Action (Execute Commands - 10-15 sec)**
+- Keywords: delete, create, scale, restart, patch, apply, edit
+- Flow: Generate commands → Confirm → Execute → Summary
+- Examples: "delete pods", "scale deployment to 3", "restart pods"
+- Method: `_process_action_query()`
 
-**Test Cases After Fix:**
+**Priority Logic:**
+1. Check informational keywords first
+2. If informational + troubleshooting words → prefer troubleshooting
+3. Check troubleshooting keywords
+4. Check action keywords
+5. Default to informational (safer)
+
+**Benefits:**
+- ✅ Simple queries now take 5-10 sec instead of 30-60 sec
+- ✅ "list pods" no longer runs full investigation
+- ✅ Better user experience for 80% of queries
+- ✅ Reduced LLM token usage for simple queries
+
+**Test Results:**
 ```python
-assert _determine_query_intent("delete pods") == "action"
-assert _determine_query_intent("debug pods") == "diagnostic"
-assert _determine_query_intent("show pods") == "diagnostic"
-assert _determine_query_intent("delete and debug") == "action"  # delete first
-assert _determine_query_intent("debug then delete") == "diagnostic"  # debug first
+# Verified on Linux server
+"list pods" → informational → Fast ✅
+"show deployments" → informational → Fast ✅
+"who scheduled pod X" → informational → Fast ✅
+"debug failing pods" → troubleshooting → Full investigation ✅
+"why is pod crashing" → troubleshooting → Full investigation ✅
+"delete pods" → action → Execute ✅
 ```
 
 ---

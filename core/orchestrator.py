@@ -117,7 +117,7 @@ class DevDebugOrchestrator:
         print(f"{'='*60}\n")
         
         try:
-            # Determine if this is an action request or diagnostic request
+            # Determine query intent (action, informational, or troubleshooting)
             query_intent = self._determine_query_intent(query)
             
             print(f"🎯 Query Intent: {query_intent.upper()}\n")
@@ -125,9 +125,12 @@ class DevDebugOrchestrator:
             if query_intent == 'action':
                 # User wants to execute a command (delete, create, etc.)
                 return self._process_action_query(query, namespace, pod_name, session_id)
+            elif query_intent == 'informational':
+                # User wants simple information (who, what, which, show, list)
+                return self._process_informational_query(query, namespace, pod_name, session_id)
             else:
-                # User wants diagnostics/troubleshooting
-                return self._process_diagnostic_query(query, namespace, pod_name, session_id)
+                # User wants troubleshooting/debugging (why, fix, debug)
+                return self._process_troubleshooting_query(query, namespace, pod_name, session_id)
                 
         except Exception as e:
             print(f"\n✗ Error processing query: {e}\n")
@@ -142,19 +145,27 @@ class DevDebugOrchestrator:
     
     def _determine_query_intent(self, query: str) -> str:
         """
-        Determine if user wants to execute an action or get diagnostics.
+        Determine query intent with 3-tier classification.
         
         Returns:
             'action' - User wants to execute a command (delete, create, etc.)
-            'diagnostic' - User wants troubleshooting/debugging help
+            'informational' - User wants simple info (who, what, which, show, list)
+            'troubleshooting' - User wants to debug/fix a problem
         """
         query_lower = query.lower()
         
-        # Diagnostic keywords - user wants to UNDERSTAND something (check FIRST - higher priority)
-        diagnostic_keywords = [
-            'debug', 'troubleshoot', 'diagnose', 'check', 'investigate',
-            'why', 'what', 'how', 'show', 'list', 'get', 'describe',
-            'explain', 'analyze', 'find', 'search'
+        # Informational keywords - simple queries (check FIRST - highest priority)
+        informational_keywords = [
+            'who', 'which', 'what', 'show', 'list', 'get', 'describe',
+            'check', 'display', 'print', 'view'
+        ]
+        
+        # Troubleshooting keywords - problem investigation
+        troubleshooting_keywords = [
+            'debug', 'troubleshoot', 'diagnose', 'investigate', 
+            'why', 'how', 'fix', 'resolve', 'solve',
+            'failing', 'failed', 'error', 'issue', 'problem',
+            'not working', 'broken', 'crash'
         ]
         
         # Action keywords - user wants to DO something
@@ -165,19 +176,27 @@ class DevDebugOrchestrator:
             'exec', 'run', 'expose', 'port-forward'
         ]
         
-        # Check diagnostic keywords FIRST (they take priority)
-        # This prevents "debug the pods I want to delete" from being action mode
-        for keyword in diagnostic_keywords:
+        # Check informational keywords FIRST (highest priority)
+        # "list pods" → informational (unless has troubleshooting words)
+        for keyword in informational_keywords:
             if keyword in query_lower:
-                return 'diagnostic'
+                # But if it also has troubleshooting words, prefer troubleshooting
+                has_troubleshooting = any(kw in query_lower for kw in troubleshooting_keywords)
+                if not has_troubleshooting:
+                    return 'informational'
+        
+        # Check troubleshooting keywords
+        for keyword in troubleshooting_keywords:
+            if keyword in query_lower:
+                return 'troubleshooting'
         
         # Then check for action keywords
         for keyword in action_keywords:
             if keyword in query_lower:
                 return 'action'
         
-        # Default to diagnostic (safer)
-        return 'diagnostic'
+        # Default to informational (safer than troubleshooting)
+        return 'informational'
     
     def _process_action_query(self, query: str, namespace: str, pod_name: str, session_id: str) -> Dict:
         """
@@ -276,10 +295,112 @@ class DevDebugOrchestrator:
             }
         }
     
-    def _process_diagnostic_query(self, query: str, namespace: str, pod_name: str, session_id: str) -> Dict:
+    def _process_informational_query(self, query: str, namespace: str, pod_name: str, session_id: str) -> Dict:
         """
-        Process a diagnostic/troubleshooting request.
-        Original investigation flow.
+        Process a simple informational query - fast path without full investigation.
+        For queries like "list pods", "show deployments", "who scheduled", etc.
+        """
+        print("ℹ️  Informational Query - Fast path\n")
+        
+        # Step 1: Generate simple diagnostic commands
+        print("📋 Step 1: Generating kubectl commands...")
+        commands = self.agents['llm'].generate_diagnostic_commands(
+            query=query,
+            namespace=namespace,
+            pod_name=pod_name or ""
+        )
+        
+        if not commands:
+            return {
+                'session_id': session_id,
+                'query': query,
+                'namespace': namespace,
+                'error': 'Could not generate commands',
+                'timestamp': time.time(),
+                'solution': 'Unable to generate appropriate kubectl commands.'
+            }
+        
+        print(f"✓ Generated {len(commands)} command(s)\n")
+        
+        # Step 2: Execute commands
+        print("⚡ Step 2: Executing commands...\n")
+        execution_results = {}
+        
+        for cmd_obj in commands:
+            cmd = cmd_obj['cmd']
+            print(f"   ▶ {cmd}")
+            
+            exec_request = AgentRequest(
+                query=cmd,
+                context={'namespace': namespace},
+                metadata={'command_type': 'kubectl'},
+                session_id=session_id
+            )
+            exec_response = self.agents['execution'].process(exec_request)
+            
+            if exec_response.success:
+                output = exec_response.data.get('stdout', '')
+                if output:
+                    print(f"      ✓ {output[:100]}...")
+                execution_results[cmd] = exec_response.data
+            else:
+                print(f"      ✗ {exec_response.error}")
+                execution_results[cmd] = {'error': exec_response.error}
+        
+        # Step 3: Use LLM to answer the question directly from the results
+        print("\n🤖 Step 3: Generating answer...\n")
+        
+        llm_context = {
+            'diagnostics': execution_results,
+            'root_cause': 'Informational query - no troubleshooting needed',
+            'documentation': [],
+            'code_examples': {}
+        }
+        
+        llm_request = AgentRequest(
+            query=f"{query}\n\nPlease provide a direct, concise answer based on the kubectl output above.",
+            context=llm_context,
+            metadata={},
+            session_id=session_id
+        )
+        llm_response = self.agents['llm'].process(llm_request)
+        
+        if llm_response.success:
+            solution_text = llm_response.data.get('response', 'No answer generated')
+        else:
+            # Fallback: show the raw data
+            solution_text = f"**Query:** {query}\n\n**Results:**\n"
+            for cmd, result in execution_results.items():
+                if 'stdout' in result:
+                    solution_text += f"\n```\n{result['stdout'][:500]}\n```\n"
+        
+        result = {
+            'session_id': session_id,
+            'query': query,
+            'namespace': namespace,
+            'query_type': 'informational',
+            'solution': solution_text,
+            'diagnostics': execution_results,
+            'commands_executed': [cmd['cmd'] for cmd in commands],
+            'timestamp': time.time(),
+            'metadata': {
+                'fast_path': True,
+                'commands_count': len(commands)
+            }
+        }
+        
+        self._store_in_session(session_id, result)
+        
+        print(f"{'='*60}")
+        print("✓ Query answered")
+        print(f"{'='*60}\n")
+        
+        return result
+    
+    def _process_troubleshooting_query(self, query: str, namespace: str, pod_name: str, session_id: str) -> Dict:
+        """
+        Process a troubleshooting/diagnostic request.
+        Performs full investigation including RAG, iterative diagnosis, and root cause analysis.
         """
         # Step 1: Search documentation (RAG)
         print("📚 Step 1: Searching documentation...")
@@ -340,7 +461,7 @@ class DevDebugOrchestrator:
             'session_id': session_id,
             'query': query,
             'namespace': namespace,
-            'query_type': 'diagnostic',
+            'query_type': 'troubleshooting',
             'solution': solution_text,
             'investigation_findings': investigation_result.get('all_findings', {}),
             'diagnostics': investigation_result.get('all_diagnostics', {}),

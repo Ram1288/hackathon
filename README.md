@@ -13,7 +13,46 @@ DevDebug AI is an AI-powered troubleshooting system that combines RAG (Retrieval
 - **💻 Multiple Interfaces**: CLI, REST API, and ready for kAgent integration
 - **🔒 Safety First**: Command validation and execution restrictions
 
-## 🏗️ Architecture
+## � How It Works
+
+### 3-Tier Query Classification System
+
+DevDebug AI uses an intelligent 3-tier classification system to optimize response time and user experience:
+
+```
+User Query
+    ↓
+Intent Detection (3 categories)
+    ↓
+┌──────────────┬────────────────┬─────────────────┐
+│   ACTION     │ INFORMATIONAL  │ TROUBLESHOOTING │
+└──────────────┴────────────────┴─────────────────┘
+    ↓               ↓                   ↓
+Execute         Fast Path          Full Investigation
+Commands        (Direct Answer)    (Root Cause Analysis)
+10-15 sec       5-10 sec ⚡        30-60 sec
+```
+
+**Tier 1: Informational (Fast Path)** - *5-10 seconds*
+- Keywords: `who`, `what`, `which`, `show`, `list`, `get`, `describe`
+- Flow: Generate commands → Execute → Direct answer
+- Example: "list pods in default namespace"
+
+**Tier 2: Troubleshooting (Full Investigation)** - *30-60 seconds*
+- Keywords: `debug`, `fix`, `why`, `error`, `failing`, `broken`
+- Flow: RAG → Iterative investigation → Root cause analysis
+- Example: "debug why pods are failing to start"
+
+**Tier 3: Action (Execute Commands)** - *10-15 seconds*
+- Keywords: `delete`, `scale`, `create`, `restart`, `patch`
+- Flow: Generate commands → Execute → Summary
+- Example: "scale deployment nginx to 5 replicas"
+
+📖 **[View Complete Workflow Documentation](docs/3_TIER_CLASSIFICATION_WORKFLOW.md)**
+
+---
+
+### Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
