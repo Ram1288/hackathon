@@ -1,13 +1,15 @@
-"""DevDebug Orchestrator - Main coordination engine"""
-from typing import Dict, List, Any, Optional
-import uuid
+"""Orchestrator for coordinating AI agents"""
 import time
+import uuid
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from core.interfaces import AgentRequest, AgentResponse, BaseAgent
+from core.interfaces import AgentRequest, BaseAgent
 from agents.document_agent import DocumentAgent
 from agents.execution_agent import ExecutionAgent
 from agents.llm_agent import LLMAgent
+from agents.investigator_agent import InvestigatorAgent
+from agents.investigation_agent import InvestigationAgent
 
 
 class DevDebugOrchestrator:
@@ -49,6 +51,23 @@ class DevDebugOrchestrator:
             print("Initializing LLM Agent...")
             self.agents['llm'] = LLMAgent(
                 self.config.get('llm_agent', {})
+            )
+            
+            # Investigator Agent (Pattern recognition and iterative analysis)
+            print("Initializing Investigator Agent...")
+            self.agents['investigator'] = InvestigatorAgent(
+                self.config.get('investigator_agent', {})
+            )
+            
+            # Investigation Agent (AI-driven iterative troubleshooting)
+            print("Initializing Investigation Agent...")
+            self.agents['investigation'] = InvestigationAgent(
+                self.config.get('investigation_agent', {})
+            )
+            # Inject dependencies
+            self.agents['investigation'].set_agents(
+                self.agents['llm'],
+                self.agents['execution']
             )
             
             print("✓ All agents initialized successfully")
@@ -114,39 +133,31 @@ class DevDebugOrchestrator:
             else:
                 print(f"✗ Documentation search failed: {doc_response.error}")
             
-            # Step 2: Run diagnostics if needed
-            print("\n🔍 Step 2: Running diagnostics...")
-            exec_context = {
-                'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
-                'namespace': namespace
-            }
-            if pod_name:
-                exec_context['pod_name'] = pod_name
+            # Step 2: Use ITERATIVE INVESTIGATION instead of one-shot diagnostics
+            print("\n� Step 2: Starting AI-driven iterative investigation...")
             
-            exec_request = AgentRequest(
-                query=query,
-                context=exec_context,
-                metadata={},
-                session_id=session_id
+            investigation_result = self.agents['investigation'].investigate(
+                initial_query=query,
+                namespace=namespace,
+                pod_name=pod_name or ""
             )
-            exec_response = self.agents['execution'].process(exec_request)
             
-            if exec_response.success:
-                print(f"✓ Diagnostics completed (mode: {exec_response.metadata.get('mode', 'unknown')})")
-            else:
-                print(f"✗ Diagnostics failed: {exec_response.error}")
+            print(f"✓ Investigation completed in {investigation_result['iterations']} iteration(s)")
+            print(f"✓ Confidence: {investigation_result['confidence']*100:.1f}%")
             
-            # Step 3: Generate solution with LLM
-            print("\n🤖 Step 3: Generating solution with LLM...")
+            # Step 3: Generate comprehensive solution with LLM (if available and needed)
+            print("\n🤖 Step 3: Generating comprehensive solution...")
+            
             llm_context = {
-                'diagnostics': exec_response.data if exec_response.success else {},
+                'diagnostics': investigation_result['all_findings'],
+                'root_cause': investigation_result['final_hypothesis'],
+                'investigation_path': investigation_result['investigation_path'],
                 'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
-                'code_examples': doc_response.data.get('code_examples', {}) if doc_response.success else {},
-                'k8s_patterns': doc_response.data.get('k8s_patterns', []) if doc_response.success else []
+                'code_examples': doc_response.data.get('code_examples', {}) if doc_response.success else []
             }
             
             llm_request = AgentRequest(
-                query=query,
+                query=f"{query}\n\nInvestigation found: {investigation_result['final_hypothesis']}",
                 context=llm_context,
                 metadata={},
                 session_id=session_id
@@ -155,16 +166,20 @@ class DevDebugOrchestrator:
             
             if llm_response.success:
                 print(f"✓ Solution generated (model: {llm_response.metadata.get('model', 'unknown')})")
+                solution_text = llm_response.data.get('response', investigation_result['solution'])
             else:
-                print(f"⚠ LLM processing had issues: {llm_response.error}")
+                print(f"⚠ LLM unavailable, using investigation findings")
+                solution_text = f"**Root Cause:** {investigation_result['final_hypothesis']}\n\n{investigation_result['solution']}"
             
+            # Combine results
             # Combine results
             result = {
                 'session_id': session_id,
                 'query': query,
                 'namespace': namespace,
-                'solution': llm_response.data.get('response', 'Unable to generate solution') if llm_response.success else 'LLM unavailable',
-                'diagnostics': exec_response.data if exec_response.success else {},
+                'solution': solution_text,
+                'investigation_findings': investigation_result.get('all_findings', {}),
+                'diagnostics': investigation_result.get('all_diagnostics', {}),
                 'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
                 'code_examples': doc_response.data.get('code_examples', {}) if doc_response.success else {},
                 'k8s_patterns': doc_response.data.get('k8s_patterns', []) if doc_response.success else [],
@@ -174,10 +189,10 @@ class DevDebugOrchestrator:
                         'success': doc_response.success,
                         'execution_time': doc_response.execution_time
                     },
-                    'exec_agent': {
-                        'success': exec_response.success,
-                        'execution_time': exec_response.execution_time,
-                        'mode': exec_response.metadata.get('mode') if exec_response.success else None
+                    'investigation': {
+                        'iterations': investigation_result.get('iterations', 0),
+                        'confidence': investigation_result.get('confidence', 0.0),
+                        'investigation_path': investigation_result.get('investigation_path', [])
                     },
                     'llm_agent': {
                         'success': llm_response.success,
