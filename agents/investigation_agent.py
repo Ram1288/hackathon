@@ -143,7 +143,12 @@ class InvestigationAgent(BaseAgent):
         """
         findings = context['findings']
         
-        # First, try AI-powered analysis (best option)
+        # CRITICAL: In iteration 1, we usually don't have detailed findings yet
+        # Use pattern recognition which is more reliable than LLM speculation
+        if iteration == 1 or not findings:
+            return self._pattern_based_analysis(findings, context['query'])
+        
+        # In later iterations with actual data, try LLM analysis (if available)
         if self.llm_agent and self._check_llm_available():
             try:
                 return self._llm_analyze_findings(context, history, iteration)
@@ -213,7 +218,7 @@ Analyze the findings and determine:
     def _pattern_based_analysis(self, findings: Dict, query: str) -> Dict:
         """
         Intelligent pattern recognition from diagnostic output.
-        Not keyword matching - looks for ERROR patterns, stack traces, common issues.
+        Detects common K8s error patterns and determines if we have enough info.
         """
         all_output = ""
         for cmd, result in findings.items():
@@ -223,47 +228,87 @@ Analyze the findings and determine:
         
         all_output_lower = all_output.lower()
         
+        # Phase 1: Check if we have resource discovery output
+        has_pod_list = 'kubectl get pods' in ' '.join(findings.keys()).lower()
+        has_detailed_info = any(cmd for cmd in findings.keys() if 'describe' in cmd.lower() or 'logs' in cmd.lower())
+        
         # Detect error patterns (intelligent, not hardcoded)
         error_indicators = []
         confidence = 0.3  # Start low
+        hypothesis = "Gathering diagnostic information..."
+        needs_more = True
         
-        # Look for ERROR/FATAL/PANIC lines
-        error_lines = [line for line in all_output.split('\n') 
-                      if any(marker in line.lower() for marker in ['error', 'fatal', 'panic', 'failed'])]
+        # Look for specific K8s error patterns
+        if 'createcontainerconfigerror' in all_output_lower:
+            hypothesis = "Pods have CreateContainerConfigError - likely missing ConfigMap or Secret"
+            confidence = 0.9  # High confidence on this specific error
+            needs_more = not has_detailed_info  # Need detailed describe if we don't have it
         
-        if error_lines:
-            # Found explicit errors
-            error_indicators.extend(error_lines[:3])  # Top 3 errors
-            confidence = 0.7
-            
-            # Extract the actual error message
-            hypothesis = "Detected errors: " + "; ".join(
-                line.strip()[:100] for line in error_lines[:2]
-            )
-            
-            # Check if error is definitive
-            if any(term in all_output_lower for term in ['certificate', 'expired', 'connection refused', 'not found']):
-                confidence = 0.9
-                needs_more = False
-            else:
-                needs_more = True if confidence < 0.8 else False
+        elif 'imagepullbackoff' in all_output_lower or 'errimagepull' in all_output_lower:
+            hypothesis = "Pods cannot pull container images - check image name and registry credentials"
+            confidence = 0.9
+            needs_more = not has_detailed_info
+        
+        elif 'crashloopbackoff' in all_output_lower:
+            hypothesis = "Pods are crash looping - need to examine logs for application error"
+            confidence = 0.8
+            needs_more = not has_detailed_info  # Need logs!
+        
+        elif 'oomkilled' in all_output_lower:
+            hypothesis = "Pods killed due to Out of Memory - need to increase memory limits"
+            confidence = 0.95
+            needs_more = False  # Pretty clear what the issue is
+        
+        elif 'evicted' in all_output_lower:
+            hypothesis = "Pods evicted - likely node resource pressure or PVC issues"
+            confidence = 0.85
+            needs_more = not has_detailed_info
+        
+        # Generic error detection
+        elif not hypothesis.startswith("Gathering"):
+            pass  # Keep previous specific hypothesis
         else:
-            # No explicit errors, check restart/status patterns
-            if 'restart count:' in all_output_lower:
+            # Look for ERROR/FATAL/PANIC lines
+            error_lines = [line for line in all_output.split('\n') 
+                          if any(marker in line.lower() for marker in ['error', 'fatal', 'panic', 'failed', 'warning'])]
+            
+            if error_lines:
+                # Found explicit errors
+                error_indicators.extend(error_lines[:3])  # Top 3 errors
+                confidence = 0.7
+                
+                # Extract the actual error message
+                hypothesis = "Detected errors: " + "; ".join(
+                    line.strip()[:100] for line in error_lines[:2]
+                )
+                
+                # Check if error is definitive
+                if any(term in all_output_lower for term in ['certificate', 'expired', 'connection refused', 'not found']):
+                    confidence = 0.9
+                    needs_more = not has_detailed_info
+                else:
+                    needs_more = True
+            
+            # Check restart patterns
+            elif 'restart count:' in all_output_lower or 'restarts:' in all_output_lower:
                 hypothesis = "Pod is restarting - need to check logs and events for root cause"
                 confidence = 0.5
                 needs_more = True
-            else:
-                hypothesis = "Gathering diagnostic information..."
-                confidence = 0.3
-                needs_more = True
+        
+        # Determine next focus
+        if has_pod_list and not has_detailed_info:
+            next_focus = "get detailed pod description and logs"
+        elif has_detailed_info:
+            next_focus = "analyze error messages and determine solution"
+        else:
+            next_focus = "discover affected resources"
         
         return {
             'hypothesis': hypothesis,
             'confidence': confidence,
             'needs_more_investigation': needs_more,
-            'next_focus': 'error analysis',
-            'reasoning': f'Found {len(error_lines)} error indicators'
+            'next_focus': next_focus,
+            'reasoning': f'Analyzed {len(findings)} command outputs, found specific patterns' if confidence > 0.7 else 'Initial discovery phase'
         }
     
     def _generate_next_commands(
@@ -275,28 +320,105 @@ Analyze the findings and determine:
         """
         AI decides what commands to run next based on current analysis.
         Adapts investigation path based on findings.
+        NOW HANDLES TWO-PHASE approach: Discovery → Detailed Diagnostics
         """
         if not analysis['needs_more_investigation']:
             return []
         
-        # Use LLM to generate next investigation commands
-        if self.llm_agent and self._check_llm_available():
-            try:
-                next_focus = analysis.get('next_focus', 'general diagnostics')
-                
-                # Generate targeted follow-up commands
-                commands_response = self.llm_agent.generate_diagnostic_commands(
-                    query=f"Based on hypothesis '{analysis['hypothesis']}', investigate: {next_focus}",
-                    namespace=context['namespace'],
-                    pod_name=context.get('pod_name', '')
-                )
-                
-                return [cmd['cmd'] for cmd in commands_response[:3]]  # Max 3 per iteration
-            except Exception as e:
-                print(f"   ⚠️  Could not generate AI commands: {e}")
+        # PHASE 1 (Iteration 1): Discovery - find the resources
+        if iteration == 1:
+            # Generate discovery commands (no specific names needed)
+            if self.llm_agent and self._check_llm_available():
+                try:
+                    commands_response = self.llm_agent.generate_diagnostic_commands(
+                        query=context['query'],  # Original query
+                        namespace=context['namespace'],
+                        pod_name=''  # Don't know yet
+                    )
+                    
+                    return [cmd['cmd'] for cmd in commands_response[:3]]  # Max 3 discovery commands
+                except Exception as e:
+                    print(f"   ⚠️  Could not generate AI commands: {e}")
+            
+            # Fallback discovery commands
+            return [
+                f"kubectl get pods -n {context['namespace']} --field-selector=status.phase!=Running -o wide",
+                f"kubectl get events -n {context['namespace']} --sort-by=.lastTimestamp --field-selector=type=Warning"
+            ]
         
-        # Fallback: Basic next steps based on iteration
-        return self._fallback_next_commands(context, iteration)
+        # PHASE 2 (Iteration 2+): Detailed diagnostics with discovered resource names
+        else:
+            # Extract resource names from previous findings
+            discovered_resources = self._extract_resource_names_from_findings(context['findings'])
+            
+            if not discovered_resources:
+                print(f"   ⚠️  No specific resources discovered in previous iteration")
+                return []
+            
+            # Generate targeted diagnostics for discovered resources
+            commands = []
+            next_focus = analysis.get('next_focus', 'detailed diagnostics')
+            
+            for resource in discovered_resources[:2]:  # Limit to first 2 resources
+                resource_type = resource['type']  # 'pod', 'deployment', etc.
+                resource_name = resource['name']
+                
+                if resource_type == 'pod':
+                    commands.append(f"kubectl describe pod {resource_name} -n {context['namespace']}")
+                    commands.append(f"kubectl logs {resource_name} -n {context['namespace']} --tail=50")
+                elif resource_type == 'deployment':
+                    commands.append(f"kubectl describe deployment {resource_name} -n {context['namespace']}")
+                    commands.append(f"kubectl get pods -n {context['namespace']} -l app={resource_name}")
+            
+            return commands[:4]  # Max 4 detailed commands
+    
+    def _extract_resource_names_from_findings(self, findings: Dict) -> List[Dict]:
+        """
+        Parse kubectl output to extract actual resource names.
+        Looks for pod names, deployment names, etc. from previous commands.
+        """
+        resources = []
+        
+        for cmd, result in findings.items():
+            if not isinstance(result, dict):
+                continue
+            
+            stdout = result.get('stdout', '')
+            if not stdout:
+                continue
+            
+            # Parse 'kubectl get pods' output
+            if 'kubectl get pods' in cmd or 'kubectl get pod' in cmd:
+                lines = stdout.strip().split('\n')
+                if len(lines) > 1:  # Skip header
+                    for line in lines[1:]:
+                        parts = line.split()
+                        if parts:
+                            pod_name = parts[0]
+                            status = parts[2] if len(parts) > 2 else 'Unknown'
+                            
+                            # Only add non-running pods
+                            if status.lower() != 'running':
+                                resources.append({
+                                    'type': 'pod',
+                                    'name': pod_name,
+                                    'status': status
+                                })
+            
+            # Parse 'kubectl get deployments' output
+            elif 'kubectl get deployment' in cmd:
+                lines = stdout.strip().split('\n')
+                if len(lines) > 1:
+                    for line in lines[1:]:
+                        parts = line.split()
+                        if parts:
+                            resources.append({
+                                'type': 'deployment',
+                                'name': parts[0],
+                                'status': parts[1] if len(parts) > 1 else 'Unknown'
+                            })
+        
+        return resources
     
     def _fallback_next_commands(self, context: Dict, iteration: int) -> List[str]:
         """Basic progressive investigation when AI unavailable"""

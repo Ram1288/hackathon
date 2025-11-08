@@ -33,7 +33,7 @@ class SecurityPolicyAgent(BaseAgent):
 **Command to evaluate:**
 {command}
 
-**User's intent:**
+**User's original query:**
 {user_query}
 
 **Permission context:**
@@ -42,15 +42,14 @@ class SecurityPolicyAgent(BaseAgent):
 - Update operations allowed: {allow_update}
 - Read-only mode: {read_only_mode}
 
-**Your task:**
-Analyze if this command is safe to execute given the permission context and user intent.
+**IMPORTANT RULES:**
+1. kubectl get/describe/logs/top commands are ALWAYS SAFE (read-only)
+2. If user wants to delete and delete is allowed, kubectl delete is SAFE
+3. Multi-step operations are normal: first get resources, then delete them
+4. Only block if command contains actual dangerous operations like: rm, dd, mkfs, format
 
-**Consider:**
-1. Does the command match the user's stated intent?
-2. Is the command within allowed permissions?
-3. Could this command cause unintended damage? (e.g., rm -rf, delete production, etc.)
-4. Is this a read-only operation when in read-only mode?
-5. Does it target specific resources or broad wildcards?
+**Your task:**
+Evaluate if this specific kubectl command is safe to execute.
 
 **Output JSON only:**
 {{
@@ -58,7 +57,13 @@ Analyze if this command is safe to execute given the permission context and user
   "reason": "brief explanation",
   "risk_level": "low|medium|high",
   "suggestion": "alternative if unsafe, null otherwise"
-}}"""
+}}
+
+Examples:
+- kubectl get pods → {{"safe": true, "reason": "read-only operation"}}
+- kubectl delete pod xyz (when allow_delete=true) → {{"safe": true, "reason": "delete allowed"}}
+- kubectl delete pod xyz (when allow_delete=false) → {{"safe": false, "reason": "delete not permitted"}}
+- rm -rf / → {{"safe": false, "reason": "dangerous shell command"}}"""
     
     def evaluate_command_safety(self, command: str, user_query: str) -> Tuple[bool, str, str]:
         """
@@ -111,6 +116,14 @@ Analyze if this command is safe to execute given the permission context and user
         Permission-based logic, minimal hardcoding.
         """
         command_lower = command.lower()
+        
+        # CRITICAL: Read operations should always be allowed
+        read_operations = ['get', 'describe', 'logs', 'top', 'explain', 'api-resources', 'api-versions']
+        is_read_operation = any(f'kubectl {op}' in command_lower for op in read_operations)
+        
+        # If it's a read operation, allow it regardless of mode
+        if is_read_operation:
+            return (True, "Read operation permitted", "")
         
         # Check permissions based on operation type detected via general patterns
         # Not perfect but better than nothing when AI down

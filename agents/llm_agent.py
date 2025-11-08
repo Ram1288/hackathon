@@ -46,36 +46,129 @@ class LLMAgent(BaseAgent):
 
 {dynamic_knowledge}
 
-**Your Task:**
-Based on the DISCOVERED resources and operations above (not hardcoded lists), analyze the user's query and determine the EXACT commands needed.
+**CRITICAL DIAGNOSTIC STRATEGY:**
+When debugging issues (like "pods not running"), you MUST use a TWO-PHASE approach:
+
+**PHASE 1 - DISCOVERY (always first):**
+- List/find the problematic resources with specific selectors
+- Use --field-selector, -l (labels), or -o (output format) to filter
+- Examples:
+  * Find non-running pods: `kubectl get pods -n {namespace} --field-selector=status.phase!=Running -o wide`
+  * Find failed pods: `kubectl get pods -n {namespace} --field-selector=status.phase=Failed`
+  * List all events: `kubectl get events -n {namespace} --sort-by=.lastTimestamp`
+
+**PHASE 2 - DETAILED DIAGNOSTICS (after discovery):**
+- Use the discovered resource names in detailed commands
+- If you don't know specific names yet, use `-o jsonpath` to extract them
+- Examples (these commands will be generated LATER with actual names):
+  * `kubectl describe pod <specific-pod-name> -n {namespace}`
+  * `kubectl logs <specific-pod-name> -n {namespace} --tail=50`
+
+**For THIS request, generate ONLY Phase 1 (discovery) commands!**
+The system will parse results and generate Phase 2 commands automatically.
 
 **CRITICAL RULES:**
-1. ❌ NEVER use placeholders like POD_NAME, <pod-name>, {pod_name}
-2. ✅ Use field-selectors for bulk operations: --field-selector=status.phase!=Running
-3. ✅ If query mentions specific resource name, use it directly
-4. ✅ Generate commands that execute WITHOUT manual substitution
-5. ✅ Use ONLY the resources and operations that were discovered in this environment
+1. ❌ NEVER use placeholders in Phase 1 commands
+2. ✅ Use field-selectors, labels, output formats to find resources
+3. ✅ Commands must be immediately executable without substitution
+4. ✅ Maximum 3 discovery commands per request
+5. ✅ Use ONLY resources discovered in this environment (see above)
 
-**Think like an expert:**
-- What information do I need to diagnose this issue?
-- Which discovered resources are relevant?
-- What's the logical investigation sequence?
-- Have similar issues been resolved before? (check learned patterns above)
+**CRITICAL OUTPUT REQUIREMENTS:**
+1. Return ONLY valid JSON - no markdown, no code blocks, no explanations
+2. Use double quotes for all strings (not single quotes)
+3. NO COMMENTS in JSON (no //, no /* */) - JSON does not support comments!
+4. Escape special characters properly (\\n, \\", \\\\)
+5. Each command must be executable as-is (no placeholders)
 
-**Output Format (JSON only, no markdown, no explanation):**
+**EXACT OUTPUT FORMAT:**
 {{
   "commands": [
-    {{"cmd": "actual command here", "reason": "why this command"}},
-    ...max 5 commands
+    {{
+      "cmd": "kubectl get pods -n {namespace} --field-selector=status.phase!=Running -o wide",
+      "reason": "Find all non-running pods with detailed status information"
+    }},
+    {{
+      "cmd": "kubectl get events -n {namespace} --sort-by=.lastTimestamp --field-selector=type=Warning",
+      "reason": "Get recent warning events that might explain pod failures"
+    }}
   ]
 }}
 
-Analyze the query and generate commands based on DISCOVERED capabilities:""",
+**GOOD Examples (Phase 1 discovery):**
+{{
+  "commands": [
+    {{"cmd": "kubectl get pods -n production --field-selector=status.phase!=Running -o jsonpath='{{.items[*].metadata.name}}'", "reason": "List non-running pod names"}},
+    {{"cmd": "kubectl get events -n production --sort-by=.lastTimestamp", "reason": "Check recent events"}}
+  ]
+}}
+
+**BAD Examples (DO NOT DO THIS):**
+❌ {{"cmd": "kubectl describe pod <pod-name> -n default"}} - has placeholder!
+❌ {{"cmd": "kubectl logs POD_NAME"}} - has placeholder!
+❌ // {{"cmd": "kubectl get pods"}} - has comment!
+
+Now generate Phase 1 (discovery) commands in VALID JSON format:""",
+
+            'generate_action_commands': """You are a Kubernetes expert executing ACTION commands.
+
+**User Action Request:**
+{query}
+
+**Context:**
+- Namespace: {namespace}
+- Pod Name: {pod_name}
+
+{dynamic_knowledge}
+
+**ACTION EXECUTION STRATEGY:**
+The user wants to EXECUTE an action (delete, create, scale, etc.), not just investigate.
+Generate commands to discover resources, then execute the action.
+
+**STEP 1 - DISCOVERY (use simple -o wide, not jsonpath):**
+  * Find non-running pods: kubectl get pods -n {namespace} --field-selector=status.phase!=Running -o wide
+  * Find all pods: kubectl get pods -n {namespace} -o wide
+
+**STEP 2 - ACTION (use field-selectors when possible):**
+  * Delete non-running pods: kubectl delete pods -n {namespace} --field-selector=status.phase!=Running
+  * Scale deployment: kubectl scale deployment NAME -n {namespace} --replicas=3
+  * Restart deployment: kubectl rollout restart deployment NAME -n {namespace}
+
+**CRITICAL JSON RULES:**
+1. Use ONLY double quotes in JSON
+2. DO NOT use jsonpath output format (causes quote issues)
+3. Use -o wide or -o name instead
+4. NO special characters in cmd field that need escaping
+5. Keep commands simple and executable
+
+**CORRECT OUTPUT (copy this structure exactly):**
+{{
+  "commands": [
+    {{
+      "cmd": "kubectl get pods -n {namespace} --field-selector=status.phase!=Running -o wide",
+      "reason": "Step 1: List non-running pods"
+    }},
+    {{
+      "cmd": "kubectl delete pods -n {namespace} --field-selector=status.phase!=Running",
+      "reason": "Step 2: Delete non-running pods"
+    }}
+  ]
+}}
+
+**BAD - DO NOT DO THIS:**
+{{"cmd": "kubectl get pods -o jsonpath=\"{{.items[*].name}}\""}}  ← Nested quotes break JSON!
+
+Generate 2 commands in VALID JSON format (discovery + action):
+
+Now generate action commands in VALID JSON format:""",
             
             'troubleshoot': """You are a Kubernetes and RHEL systems expert. A user has a query about their Kubernetes cluster.
 
 **User Query:**
 {query}
+
+**Investigation Root Cause (AI-determined):**
+{root_cause}
 
 **Diagnostic Results from kubectl:**
 {diagnostics}
@@ -86,7 +179,7 @@ Analyze the query and generate commands based on DISCOVERED capabilities:""",
 **Code Examples Available:**
 {code_examples}
 
-IMPORTANT: First, analyze the diagnostic results carefully. If the kubectl commands executed successfully and returned results (pods, services, etc.), acknowledge this in your response. The user may be asking to list/view resources rather than troubleshoot a problem.
+CRITICAL: The investigation agent has already identified the root cause above. Your job is to provide a detailed solution based on that root cause. DO NOT contradict or ignore the investigation findings!
 
 If this is an informational query (list, show, get resources):
 - Summarize what was found in the diagnostic results
@@ -94,12 +187,12 @@ If this is an informational query (list, show, get resources):
 - Suggest useful follow-up queries or commands
 
 If this is a troubleshooting query:
-1. **Root Cause Analysis**: Identify the likely cause of the issue based on the diagnostic data
-2. **Immediate Solution**: Provide specific commands or steps to fix the issue
+1. **Acknowledge the Root Cause**: Start with the identified root cause from the investigation
+2. **Immediate Solution**: Provide specific commands or steps to fix the issue based on the root cause
 3. **Verification**: How to verify the fix worked
 4. **Prevention**: Steps to prevent this issue in the future
 
-Be concise, technical, and actionable. Base your analysis on the actual diagnostic results provided.""",
+Be concise, technical, and actionable. Base your analysis on the investigation findings and diagnostic results provided.""",
             
             'analyze_logs': """You are a Kubernetes expert analyzing pod logs to identify issues.
 
@@ -256,6 +349,7 @@ Focus on practical, measurable improvements."""
         code_examples = self._format_code_examples(request.context.get('code_examples', {}))
         logs = request.context.get('logs', 'No logs provided')
         context = request.context.get('additional_context', '')
+        root_cause = request.context.get('root_cause', 'Investigation in progress...')
         
         # Fill in template
         prompt = template.format(
@@ -265,7 +359,8 @@ Focus on practical, measurable improvements."""
             code_examples=code_examples,
             logs=logs,
             context=context,
-            requirement=request.query
+            requirement=request.query,
+            root_cause=root_cause
         )
         
         return prompt
@@ -322,7 +417,7 @@ Focus on practical, measurable improvements."""
         
         return '\n\n'.join(formatted)
     
-    def _query_ollama(self, prompt: str) -> str:
+    def _query_ollama(self, prompt: str, max_tokens: Optional[int] = None) -> str:
         """Query Ollama API"""
         payload = {
             'model': self.model,
@@ -330,7 +425,7 @@ Focus on practical, measurable improvements."""
             'stream': False,
             'options': {
                 'temperature': self.temperature,
-                'num_predict': self.max_tokens
+                'num_predict': max_tokens or self.max_tokens
             }
         }
         
@@ -348,6 +443,101 @@ Focus on practical, measurable improvements."""
             raise AgentProcessingError(f"Ollama query failed: {str(e)}")
     
 
+    
+    def _extract_and_validate_json(self, llm_response: str) -> Optional[Dict]:
+        """
+        Extract and validate JSON from LLM response.
+        Works with multiple LLM formats (Ollama, OpenAI, Claude, etc.)
+        Handles common LLM mistakes like comments, single quotes, etc.
+        """
+        import json
+        import re
+        
+        # Step 1: Remove markdown code blocks if present
+        # Handle: ```json {...}``` or ```{...}```
+        cleaned = re.sub(r'```(?:json)?\s*', '', llm_response)
+        cleaned = re.sub(r'```\s*$', '', cleaned)
+        
+        # Step 2: Find JSON object
+        # Match from first { to last } - but handle truncated responses
+        json_match = re.search(r'\{[\s\S]*\}', cleaned)
+        if not json_match:
+            print(f"[DEBUG] No JSON found in response: {llm_response[:200]}")
+            return None
+        
+        json_str = json_match.group()
+        
+        # Step 2.5: Check if JSON looks truncated (incomplete)
+        # Count opening and closing braces/brackets
+        open_braces = json_str.count('{')
+        close_braces = json_str.count('}')
+        open_brackets = json_str.count('[')
+        close_brackets = json_str.count(']')
+        
+        if open_braces > close_braces or open_brackets > close_brackets:
+            print(f"[DEBUG] JSON appears truncated (LLM hit token limit)")
+            # Try to salvage what we have by closing structures
+            while json_str.count('{') > json_str.count('}'):
+                json_str += '}'
+            while json_str.count('[') > json_str.count(']'):
+                json_str += ']'
+            print(f"[DEBUG] Attempting to fix truncated JSON...")
+        
+        # Step 3: Clean up common LLM JSON issues
+        # Remove single-line comments (// ...)
+        json_str = re.sub(r'//[^\n]*', '', json_str)
+        
+        # Remove multi-line comments (/* ... */)
+        json_str = re.sub(r'/\*[\s\S]*?\*/', '', json_str)
+        
+        # Fix trailing commas before } or ]
+        json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+        
+        # Fix single quotes to double quotes (some LLMs do this)
+        json_str = re.sub(r"(?<!\\)'", '"', json_str)
+        
+        # Fix unescaped newlines in strings
+        json_str = re.sub(r'(?<!\\)\n(?=[^"]*"[^"]*:)', '\\n', json_str)
+        
+        # Step 4: Try to parse
+        try:
+            data = json.loads(json_str)
+            
+            # Step 5: Validate schema
+            if not isinstance(data, dict):
+                print(f"[DEBUG] JSON is not a dict: {type(data)}")
+                return None
+            
+            if 'commands' not in data:
+                print(f"[DEBUG] Missing 'commands' key in JSON")
+                return None
+            
+            if not isinstance(data['commands'], list):
+                print(f"[DEBUG] 'commands' is not a list")
+                return None
+            
+            # Validate each command
+            valid_commands = []
+            for cmd_obj in data['commands']:
+                if isinstance(cmd_obj, dict) and 'cmd' in cmd_obj and 'reason' in cmd_obj:
+                    valid_commands.append(cmd_obj)
+                else:
+                    print(f"[DEBUG] Invalid command object: {cmd_obj}")
+            
+            if not valid_commands:
+                print(f"[DEBUG] No valid commands found")
+                return None
+            
+            data['commands'] = valid_commands
+            return data
+            
+        except json.JSONDecodeError as e:
+            print(f"[DEBUG] JSON decode error: {e}")
+            print(f"[DEBUG] Attempted to parse: {json_str[:500]}")
+            return None
+        except Exception as e:
+            print(f"[DEBUG] Unexpected error in JSON extraction: {e}")
+            return None
     
     def generate_diagnostic_commands(self, query: str, namespace: str = "default", pod_name: str = "") -> List[Dict[str, str]]:
         """
@@ -369,29 +559,80 @@ Focus on practical, measurable improvements."""
         )
         
         try:
-            response_text = self._query_ollama(prompt)
+            # Use 1500 tokens for command generation (prevents JSON truncation)
+            response_text = self._query_ollama(prompt, max_tokens=1500)
             
-            # Extract JSON from response
-            import json
-            import re
+            # Use robust JSON extraction that works with multiple LLMs
+            commands_data = self._extract_and_validate_json(response_text)
             
-            json_match = re.search(r'\{[\s\S]*?"commands"[\s\S]*?\[[\s\S]*?\][\s\S]*?\}', response_text)
-            if json_match:
-                commands_data = json.loads(json_match.group())
-                commands = commands_data.get('commands', [])
-                
-                # Replace placeholders with actual values
-                for cmd_obj in commands:
-                    if isinstance(cmd_obj, dict) and 'cmd' in cmd_obj:
-                        cmd_obj['cmd'] = cmd_obj['cmd'].replace('<pod-name>', pod_name if pod_name else 'POD_NAME')
-                        cmd_obj['cmd'] = cmd_obj['cmd'].replace('{namespace}', namespace)
-                
-                print(f"[AI] LLM generated {len(commands)} commands dynamically")
-                return commands[:5]  # Limit to 5 commands
-            else:
-                raise AgentProcessingError(f"LLM response didn't contain valid JSON: {response_text[:200]}")
+            if not commands_data:
+                raise AgentProcessingError(
+                    f"LLM did not return valid JSON. Check debug output above. Response: {response_text[:300]}"
+                )
+            
+            commands = commands_data.get('commands', [])
+            
+            # Replace placeholders with actual values
+            for cmd_obj in commands:
+                if isinstance(cmd_obj, dict) and 'cmd' in cmd_obj:
+                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('<pod-name>', pod_name if pod_name else 'POD_NAME')
+                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('{namespace}', namespace)
+                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('<namespace>', namespace)
+            
+            print(f"[AI] LLM generated {len(commands)} commands dynamically")
+            return commands[:5]  # Limit to 5 commands
+            
+        except AgentProcessingError:
+            raise
         except Exception as e:
             raise AgentProcessingError(f"LLM command generation failed: {e}")
+    
+    def generate_action_commands(self, query: str, namespace: str = "default", pod_name: str = "") -> List[Dict[str, str]]:
+        """
+        Generate kubectl commands for ACTION requests (delete, create, scale, etc.).
+        Unlike diagnostic commands, this generates BOTH discovery AND execution commands.
+        """
+        if not self._check_ollama_available():
+            raise AgentProcessingError("Ollama LLM required for command generation. Start with: ollama serve")
+        
+        # Get dynamic knowledge from knowledge agent
+        dynamic_context = self.knowledge_agent.generate_dynamic_prompt_context()
+        
+        prompt = self.prompt_templates['generate_action_commands'].format(
+            query=query,
+            namespace=namespace,
+            pod_name=pod_name or "not-specified",
+            dynamic_knowledge=dynamic_context
+        )
+        
+        try:
+            # Use 1500 tokens for action commands (need space for discovery + action)
+            response_text = self._query_ollama(prompt, max_tokens=1500)
+            
+            # Use robust JSON extraction
+            commands_data = self._extract_and_validate_json(response_text)
+            
+            if not commands_data:
+                raise AgentProcessingError(
+                    f"LLM did not return valid JSON for action commands. Check debug output above."
+                )
+            
+            commands = commands_data.get('commands', [])
+            
+            # Replace placeholders with actual values
+            for cmd_obj in commands:
+                if isinstance(cmd_obj, dict) and 'cmd' in cmd_obj:
+                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('<pod-name>', pod_name if pod_name else 'POD_NAME')
+                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('{namespace}', namespace)
+                    cmd_obj['cmd'] = cmd_obj['cmd'].replace('<namespace>', namespace)
+            
+            print(f"[AI] LLM generated {len(commands)} action commands (discovery + execution)")
+            return commands[:5]  # Limit to 5 commands
+            
+        except AgentProcessingError:
+            raise
+        except Exception as e:
+            raise AgentProcessingError(f"LLM action command generation failed: {e}")
     
     def learn_from_resolution(self, query: str, commands_executed: List[str], outcome: str):
         """

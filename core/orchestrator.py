@@ -1,13 +1,15 @@
-"""DevDebug Orchestrator - Main coordination engine"""
-from typing import Dict, List, Any, Optional
-import uuid
+"""Orchestrator for coordinating AI agents"""
 import time
+import uuid
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from core.interfaces import AgentRequest, AgentResponse, BaseAgent
+from core.interfaces import AgentRequest, BaseAgent
 from agents.document_agent import DocumentAgent
 from agents.execution_agent import ExecutionAgent
 from agents.llm_agent import LLMAgent
+from agents.investigator_agent import InvestigatorAgent
+from agents.investigation_agent import InvestigationAgent
 
 
 class DevDebugOrchestrator:
@@ -28,7 +30,6 @@ class DevDebugOrchestrator:
         self.session_store = {}
         self.max_session_history = config.get('orchestrator', {}).get('max_session_history', 100)
         self.session_timeout = config.get('orchestrator', {}).get('session_timeout', 3600)
-        self.ai_driven_diagnostics = config.get('orchestrator', {}).get('ai_driven_diagnostics', True)
         self._initialize_agents()
     
     def _initialize_agents(self):
@@ -50,6 +51,23 @@ class DevDebugOrchestrator:
             print("Initializing LLM Agent...")
             self.agents['llm'] = LLMAgent(
                 self.config.get('llm_agent', {})
+            )
+            
+            # Investigator Agent (Pattern recognition and iterative analysis)
+            print("Initializing Investigator Agent...")
+            self.agents['investigator'] = InvestigatorAgent(
+                self.config.get('investigator_agent', {})
+            )
+            
+            # Investigation Agent (AI-driven iterative troubleshooting)
+            print("Initializing Investigation Agent...")
+            self.agents['investigation'] = InvestigationAgent(
+                self.config.get('investigation_agent', {})
+            )
+            # Inject dependencies
+            self.agents['investigation'].set_agents(
+                self.agents['llm'],
+                self.agents['execution']
             )
             
             print("✓ All agents initialized successfully")
@@ -99,137 +117,18 @@ class DevDebugOrchestrator:
         print(f"{'='*60}\n")
         
         try:
-            # Step 1: Search documentation (RAG)
-            print("📚 Step 1: Searching documentation...")
-            doc_request = AgentRequest(
-                query=query,
-                context={'namespace': namespace},
-                metadata={},
-                session_id=session_id
-            )
-            doc_response = self.agents['document'].process(doc_request)
+            # Determine if this is an action request or diagnostic request
+            query_intent = self._determine_query_intent(query)
             
-            if doc_response.success:
-                print(f"✓ Found {doc_response.metadata.get('doc_count', 0)} relevant documents")
-                print(f"✓ Matched {doc_response.metadata.get('patterns_found', 0)} K8s patterns")
+            print(f"🎯 Query Intent: {query_intent.upper()}\n")
+            
+            if query_intent == 'action':
+                # User wants to execute a command (delete, create, etc.)
+                return self._process_action_query(query, namespace, pod_name, session_id)
             else:
-                print(f"✗ Documentation search failed: {doc_response.error}")
-            
-            # Step 2: Run diagnostics - AI-driven command generation
-            print("\n🔍 Step 2: Running diagnostics...")
-            
-            if self.ai_driven_diagnostics:
-                # Let LLM decide which commands to run
-                print("🤖 Using AI to determine diagnostic commands...")
-                diagnostic_commands = self.agents['llm'].generate_diagnostic_commands(
-                    query=query,
-                    namespace=namespace,
-                    pod_name=pod_name or ""
-                )
+                # User wants diagnostics/troubleshooting
+                return self._process_diagnostic_query(query, namespace, pod_name, session_id)
                 
-                if diagnostic_commands:
-                    print(f"📋 Generated {len(diagnostic_commands)} diagnostic commands")
-                    for cmd_obj in diagnostic_commands:
-                        print(f"   • {cmd_obj.get('reason', 'Diagnostic')}: {cmd_obj.get('cmd', '')}")
-                    
-                    # Execute the AI-generated commands
-                    exec_context = {
-                        'ai_generated_commands': diagnostic_commands,
-                        'namespace': namespace
-                    }
-                    if pod_name:
-                        exec_context['pod_name'] = pod_name
-                else:
-                    # Fallback to template-based
-                    print("⚠ Falling back to template-based diagnostics")
-                    exec_context = {
-                        'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
-                        'namespace': namespace
-                    }
-                    if pod_name:
-                        exec_context['pod_name'] = pod_name
-            else:
-                # Use traditional template-based approach
-                exec_context = {
-                    'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
-                    'namespace': namespace
-                }
-                if pod_name:
-                    exec_context['pod_name'] = pod_name
-            
-            exec_request = AgentRequest(
-                query=query,
-                context=exec_context,
-                metadata={},
-                session_id=session_id
-            )
-            exec_response = self.agents['execution'].process(exec_request)
-            
-            if exec_response.success:
-                print(f"✓ Diagnostics completed (mode: {exec_response.metadata.get('mode', 'unknown')})")
-            else:
-                print(f"✗ Diagnostics failed: {exec_response.error}")
-            
-            # Step 3: Generate solution with LLM
-            print("\n🤖 Step 3: Generating solution with LLM...")
-            llm_context = {
-                'diagnostics': exec_response.data if exec_response.success else {},
-                'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
-                'code_examples': doc_response.data.get('code_examples', {}) if doc_response.success else {},
-                'k8s_patterns': doc_response.data.get('k8s_patterns', []) if doc_response.success else []
-            }
-            
-            llm_request = AgentRequest(
-                query=query,
-                context=llm_context,
-                metadata={},
-                session_id=session_id
-            )
-            llm_response = self.agents['llm'].process(llm_request)
-            
-            if llm_response.success:
-                print(f"✓ Solution generated (model: {llm_response.metadata.get('model', 'unknown')})")
-            else:
-                print(f"⚠ LLM processing had issues: {llm_response.error}")
-            
-            # Combine results
-            result = {
-                'session_id': session_id,
-                'query': query,
-                'namespace': namespace,
-                'solution': llm_response.data.get('response', 'Unable to generate solution') if llm_response.success else 'LLM unavailable',
-                'diagnostics': exec_response.data if exec_response.success else {},
-                'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
-                'code_examples': doc_response.data.get('code_examples', {}) if doc_response.success else {},
-                'k8s_patterns': doc_response.data.get('k8s_patterns', []) if doc_response.success else [],
-                'timestamp': time.time(),
-                'metadata': {
-                    'doc_agent': {
-                        'success': doc_response.success,
-                        'execution_time': doc_response.execution_time
-                    },
-                    'exec_agent': {
-                        'success': exec_response.success,
-                        'execution_time': exec_response.execution_time,
-                        'mode': exec_response.metadata.get('mode') if exec_response.success else None
-                    },
-                    'llm_agent': {
-                        'success': llm_response.success,
-                        'execution_time': llm_response.execution_time,
-                        'model': llm_response.metadata.get('model') if llm_response.success else None
-                    }
-                }
-            }
-            
-            # Store in session
-            self._store_in_session(session_id, result)
-            
-            print(f"\n{'='*60}")
-            print("✓ Query processing completed successfully")
-            print(f"{'='*60}\n")
-            
-            return result
-            
         except Exception as e:
             print(f"\n✗ Error processing query: {e}\n")
             return {
@@ -240,6 +139,275 @@ class DevDebugOrchestrator:
                 'timestamp': time.time(),
                 'solution': f"An error occurred: {str(e)}"
             }
+    
+    def _determine_query_intent(self, query: str) -> str:
+        """
+        Determine if user wants to execute an action or get diagnostics.
+        
+        Returns:
+            'action' - User wants to execute a command (delete, create, etc.)
+            'diagnostic' - User wants troubleshooting/debugging help
+        """
+        query_lower = query.lower()
+        
+        # Diagnostic keywords - user wants to UNDERSTAND something (check FIRST - higher priority)
+        diagnostic_keywords = [
+            'debug', 'troubleshoot', 'diagnose', 'check', 'investigate',
+            'why', 'what', 'how', 'show', 'list', 'get', 'describe',
+            'explain', 'analyze', 'find', 'search'
+        ]
+        
+        # Action keywords - user wants to DO something
+        action_keywords = [
+            'delete', 'remove', 'create', 'add', 'apply', 
+            'scale', 'restart', 'rollout', 'patch', 'edit',
+            'drain', 'cordon', 'uncordon', 'taint', 'label',
+            'exec', 'run', 'expose', 'port-forward'
+        ]
+        
+        # Check diagnostic keywords FIRST (they take priority)
+        # This prevents "debug the pods I want to delete" from being action mode
+        for keyword in diagnostic_keywords:
+            if keyword in query_lower:
+                return 'diagnostic'
+        
+        # Then check for action keywords
+        for keyword in action_keywords:
+            if keyword in query_lower:
+                return 'action'
+        
+        # Default to diagnostic (safer)
+        return 'diagnostic'
+    
+    def _process_action_query(self, query: str, namespace: str, pod_name: str, session_id: str) -> Dict:
+        """
+        Process an action request - generate and execute commands.
+        
+        Args:
+            query: User's command request (e.g., "delete pods not running")
+            namespace: K8s namespace
+            pod_name: Optional pod name
+            session_id: Session ID
+            
+        Returns:
+            Dictionary with execution results
+        """
+        print("🎯 Action Request Detected - Generating commands...\n")
+        
+        # Step 1: Generate commands using LLM with ACTION-specific prompt
+        print("📋 Step 1: Generating kubectl action commands...")
+        commands = self.agents['llm'].generate_action_commands(
+            query=query,
+            namespace=namespace,
+            pod_name=pod_name
+        )
+        
+        if not commands:
+            return {
+                'session_id': session_id,
+                'query': query,
+                'namespace': namespace,
+                'error': 'Could not generate commands for this action',
+                'timestamp': time.time(),
+                'solution': 'Unable to generate appropriate kubectl commands. Please rephrase your request.'
+            }
+        
+        print(f"✓ Generated {len(commands)} command(s)\n")
+        
+        # Step 2: Show commands to user and ask for confirmation
+        print("📝 Commands to execute:")
+        for i, cmd_obj in enumerate(commands, 1):
+            print(f"   {i}. {cmd_obj['cmd']}")
+            print(f"      Reason: {cmd_obj['reason']}\n")
+        
+        # Step 3: Execute commands
+        print("⚡ Step 2: Executing commands...\n")
+        execution_results = {}
+        
+        for cmd_obj in commands:
+            cmd = cmd_obj['cmd']
+            print(f"   ▶ {cmd}")
+            
+            # Execute via execution agent
+            exec_request = AgentRequest(
+                query=query,
+                context={
+                    'ai_generated_commands': [cmd_obj],
+                    'namespace': namespace
+                },
+                metadata={},
+                session_id=session_id
+            )
+            
+            exec_response = self.agents['execution'].process(exec_request)
+            
+            if exec_response.success:
+                result = exec_response.data.get('results', {}).get(cmd, {})
+                if result.get('stdout'):
+                    print(f"      ✓ {result['stdout'][:100]}")
+                else:
+                    print(f"      ✓ Command executed successfully")
+                execution_results[cmd] = result
+            else:
+                print(f"      ✗ Failed: {exec_response.error}")
+                execution_results[cmd] = {'error': exec_response.error}
+        
+        # Step 3: Generate summary
+        print("\n🤖 Step 3: Generating summary...\n")
+        
+        summary = self._generate_action_summary(query, commands, execution_results)
+        
+        print(f"{'='*60}")
+        print("✓ Action completed")
+        print(f"{'='*60}\n")
+        
+        return {
+            'session_id': session_id,
+            'query': query,
+            'namespace': namespace,
+            'query_type': 'action',
+            'commands_executed': [cmd['cmd'] for cmd in commands],
+            'execution_results': execution_results,
+            'solution': summary,
+            'timestamp': time.time(),
+            'metadata': {
+                'commands_count': len(commands),
+                'success': all('error' not in r for r in execution_results.values())
+            }
+        }
+    
+    def _process_diagnostic_query(self, query: str, namespace: str, pod_name: str, session_id: str) -> Dict:
+        """
+        Process a diagnostic/troubleshooting request.
+        Original investigation flow.
+        """
+        # Step 1: Search documentation (RAG)
+        print("📚 Step 1: Searching documentation...")
+        doc_request = AgentRequest(
+            query=query,
+            context={'namespace': namespace},
+            metadata={},
+            session_id=session_id
+        )
+        doc_response = self.agents['document'].process(doc_request)
+        
+        if doc_response.success:
+            print(f"✓ Found {doc_response.metadata.get('doc_count', 0)} relevant documents")
+            print(f"✓ Matched {doc_response.metadata.get('patterns_found', 0)} K8s patterns")
+        else:
+            print(f"✗ Documentation search failed: {doc_response.error}")
+        
+        # Step 2: Use ITERATIVE INVESTIGATION instead of one-shot diagnostics
+        print("\n🔍 Step 2: Starting AI-driven iterative investigation...")
+        
+        investigation_result = self.agents['investigation'].investigate(
+            initial_query=query,
+            namespace=namespace,
+            pod_name=pod_name or ""
+        )
+        
+        print(f"✓ Investigation completed in {investigation_result['iterations']} iteration(s)")
+        print(f"✓ Confidence: {investigation_result['confidence']*100:.1f}%")
+        
+        # Step 3: Generate comprehensive solution with LLM (if available and needed)
+        print("\n🤖 Step 3: Generating comprehensive solution...")
+        
+        llm_context = {
+            'diagnostics': investigation_result['all_findings'],
+            'root_cause': investigation_result['final_hypothesis'],
+            'investigation_path': investigation_result['investigation_path'],
+            'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
+            'code_examples': doc_response.data.get('code_examples', {}) if doc_response.success else []
+        }
+        
+        llm_request = AgentRequest(
+            query=f"{query}\n\nInvestigation found: {investigation_result['final_hypothesis']}",
+            context=llm_context,
+            metadata={},
+            session_id=session_id
+        )
+        llm_response = self.agents['llm'].process(llm_request)
+        
+        if llm_response.success:
+            print(f"✓ Solution generated (model: {llm_response.metadata.get('model', 'unknown')})")
+            solution_text = llm_response.data.get('response', investigation_result['solution'])
+        else:
+            print(f"⚠ LLM unavailable, using investigation findings")
+            solution_text = f"**Root Cause:** {investigation_result['final_hypothesis']}\n\n{investigation_result['solution']}"
+        
+        # Combine results
+        result = {
+            'session_id': session_id,
+            'query': query,
+            'namespace': namespace,
+            'query_type': 'diagnostic',
+            'solution': solution_text,
+            'investigation_findings': investigation_result.get('all_findings', {}),
+            'diagnostics': investigation_result.get('all_diagnostics', {}),
+            'documentation': doc_response.data.get('documents', []) if doc_response.success else [],
+            'code_examples': doc_response.data.get('code_examples', {}) if doc_response.success else {},
+            'k8s_patterns': doc_response.data.get('k8s_patterns', []) if doc_response.success else [],
+            'timestamp': time.time(),
+            'metadata': {
+                'doc_agent': {
+                    'success': doc_response.success,
+                    'execution_time': doc_response.execution_time
+                },
+                'investigation': {
+                    'iterations': investigation_result.get('iterations', 0),
+                    'confidence': investigation_result.get('confidence', 0.0),
+                    'investigation_path': investigation_result.get('investigation_path', [])
+                },
+                'llm_agent': {
+                    'success': llm_response.success,
+                    'execution_time': llm_response.execution_time,
+                    'model': llm_response.metadata.get('model') if llm_response.success else None
+                }
+            }
+        }
+        
+        # Store in session
+        self._store_in_session(session_id, result)
+        
+        print(f"\n{'='*60}")
+        print("✓ Query processing completed successfully")
+        print(f"{'='*60}\n")
+        
+        return result
+    
+    def _generate_action_summary(self, query: str, commands: List[Dict], results: Dict) -> str:
+        """Generate a summary of action execution"""
+        success_count = sum(1 for r in results.values() if 'error' not in r)
+        total_count = len(results)
+        
+        summary = f"# Action Execution Summary\n\n"
+        summary += f"**Query:** {query}\n\n"
+        summary += f"**Commands Executed:** {total_count}\n"
+        summary += f"**Successful:** {success_count}/{total_count}\n\n"
+        
+        summary += "## Execution Details:\n\n"
+        for cmd_obj in commands:
+            cmd = cmd_obj['cmd']
+            result = results.get(cmd, {})
+            
+            if 'error' in result:
+                summary += f"❌ **{cmd}**\n"
+                summary += f"   Error: {result['error']}\n\n"
+            else:
+                summary += f"✅ **{cmd}**\n"
+                if result.get('stdout'):
+                    summary += f"   Output: {result['stdout'][:200]}\n\n"
+                else:
+                    summary += f"   Executed successfully\n\n"
+        
+        if success_count == total_count:
+            summary += "\n✅ All commands executed successfully!"
+        elif success_count > 0:
+            summary += f"\n⚠️ {total_count - success_count} command(s) failed. Check details above."
+        else:
+            summary += "\n❌ All commands failed. Check permissions and cluster connectivity."
+        
+        return summary
     
     def _store_in_session(self, session_id: str, result: Dict):
         """Store result in session history"""
