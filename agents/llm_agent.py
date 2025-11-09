@@ -110,6 +110,23 @@ Use your knowledge of kubectl to:
   → Reason: kubectl delete needs resource type (pod/deployment/etc.), not just name
   → Solution: Either specify resource type explicitly OR use output format that includes it
 
+**COMMAND CHAINING REALITY:**
+- When piping to kubectl commands: Most commands need resource type + name
+- Extraction tools output different data types:
+  → Full object selection outputs structured data (JSON/YAML objects)
+  → Name extraction outputs simple strings (one name per line)
+- Most kubectl commands expect: Resource type + names (strings)
+  → delete, describe, edit, patch, scale, etc. → Need: resource-type name
+  → Exceptions: logs, exec (can infer type from context)
+- Data type mismatch: JSON objects → kubectl command = error (silent failure)
+- Correct flow: Extract names as strings → pipe to command with resource type
+
+**KUBECTL COMMAND PATTERN:**
+- General rule: kubectl <verb> <resource-type> <name>
+- When piping names: Ensure resource type is specified
+- When extracting from JSON: Extract names (strings), not objects
+- Few exceptions exist (logs, exec) but most commands need explicit type
+
 **FORMAT SELECTION THINKING:**
 - Query needs status object inspection? → Structured format (JSON/YAML)
 - Query needs specific field extraction? → Structured format with field query
