@@ -54,7 +54,9 @@ Analyze the query and generate appropriate kubectl or helm commands. Return ONLY
 2. Helm queries (releases, charts, install, upgrade) → helm commands
 3. K8s resource queries (pods, deployments, services) → kubectl commands  
 4. For bulk/filtered operations → use --field-selector or -l (labels), NOT placeholders
-5. Apply namespace: -n {namespace} (or --all-namespaces if query specifies)
+5. Namespace logic: EITHER -n {namespace} OR --all-namespaces (NEVER BOTH!)
+   → Specific namespace → use -n {namespace}
+   → All namespaces → use --all-namespaces (omit -n)
 6. Maximum 3 commands - each immediately executable
 
 **CRITICAL - "NOT RUNNING" QUERIES:**
@@ -160,7 +162,10 @@ Generate kubectl or helm commands to execute the requested action.
 - For bulk operations → use --field-selector or -l (labels), NOT placeholders
 - For specific resources → use exact names from query
 - Discovery before destructive actions when helpful
-- Namespace: -n {namespace} (or --all-namespaces if specified)
+- Namespace logic: EITHER -n {namespace} OR --all-namespaces (NEVER BOTH!)
+  → If specific namespace provided → use -n {namespace}
+  → If query asks for "all namespaces" → use --all-namespaces (no -n flag)
+  → Cannot combine -n with --all-namespaces (mutually exclusive)
 
 **SEMANTIC UNDERSTANDING (CRITICAL):**
 - "not running" / "debug not running" = ANY pod not in healthy operational state
