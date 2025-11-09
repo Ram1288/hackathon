@@ -424,6 +424,85 @@ prompt = """
 
 ---
 
+### Issue #4: Status Object is the Source of Truth
+**Date**: 2025-01-09  
+**Problem**: LLM filtered by phase, missed the real operational state in status object  
+**User Insight**: "pod status will help us to determine better"  
+**Breakthrough**: Status object contains complete truth - phase is just metadata  
+
+**The Status Object Structure**:
+```yaml
+status:
+  phase: Pending  # ← Superficial metadata
+  conditions:     # ← THE TRUTH
+    - type: Ready
+      status: "False"  # ← Pod NOT ready (boolean fact)
+      reason: ContainersNotReady  # ← Why not ready
+      message: "containers with unready status: [grafana-operator]"
+  containerStatuses:  # ← ROOT CAUSE
+    - name: grafana-operator
+      ready: false  # ← Container NOT ready
+      state:
+        waiting:
+          reason: CreateContainerConfigError  # ← EXACT PROBLEM
+          message: "runAsNonRoot and image will run as root"  # ← SOLUTION
+```
+
+**The Truth Hierarchy**:
+1. **status.containerStatuses[].ready** = Is it working? (boolean)
+2. **status.containerStatuses[].state.waiting.reason** = Why not? (root cause)
+3. **status.conditions[type=Ready].reason** = Higher-level summary
+4. **status.phase** = Least specific, almost irrelevant for debugging
+
+**Old Approach** (WRONG):
+```python
+# ❌ Filter by phase - misses status object truth
+prompt = "Check status.phase=Failed"
+# Result: Missed Pending pods with CreateContainerConfigError!
+```
+
+**AI-First Approach** (CORRECT):
+```python
+# ✅ Teach status object structure (applies to ALL K8s resources)
+prompt = """
+**STATUS STRUCTURE WISDOM:**
+- status.conditions[] = condition type, status (True/False), reason, message
+- status.containerStatuses[] = ready (boolean), state.waiting.reason (root cause)
+- Phase is metadata - status object is truth
+
+For "not running" → status.conditions[type=Ready].status == False
+For root cause → status.containerStatuses[].state.waiting.reason
+"""
+```
+
+**Universal Pattern** (Applies to ALL resources):
+- **Deployment**: status.conditions[type=Available], readyReplicas vs replicas
+- **StatefulSet**: status.currentReplicas vs readyReplicas
+- **DaemonSet**: status.numberReady vs desiredNumberScheduled
+- **Job**: status.conditions[type=Complete/Failed], succeeded/failed
+- **CronJob**: status.lastScheduleTime, status.active[]
+
+**Why AI-First Wins**:
+- One concept (status object structure) works for ALL K8s resources
+- LLM learns pattern, applies everywhere (Pods, Deployments, Jobs, etc.)
+- No hardcoded resource-specific commands
+- Scalable: works for future K8s resources automatically
+
+**Lesson**: 
+- Don't teach resource-specific commands
+- Teach universal K8s patterns (status object structure)
+- Phase is superficial - status object contains operational truth
+- One conceptual pattern > infinite command examples
+
+**Critical Technical Detail**:
+- Human-formatted output = NO status object structure (overview + events)
+- Structured output (JSON/YAML) = COMPLETE status object (all fields)
+- For status.conditions[] or containerStatuses[] → Need structured format
+- For quick overview with events → Human format sufficient
+- LLM knows kubectl syntax - just teach when to use which format type
+
+---
+
 ### Issue #3: LLM JSON Parsing Failed (Unescaped Quotes)
 **Date**: 2025-01-09  
 **Problem**: LLM generated valid kubectl command but invalid JSON  

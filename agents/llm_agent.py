@@ -58,15 +58,65 @@ Analyze the query and generate appropriate kubectl or helm commands. Return ONLY
 6. Maximum 3 commands - each immediately executable
 
 **CRITICAL - "NOT RUNNING" QUERIES:**
-- "not running" / "debug" / "troubleshoot" = Check READY column, not just phase
-- Step 1: kubectl get pods -n <ns> (shows real STATUS: CreateContainerConfigError, CrashLoopBackOff, etc.)
-- Step 2: kubectl describe pods <pod-name> -n <ns> (for non-ready pods)
-- Don't ONLY check status.phase=Failed (misses Pending with CreateContainerConfigError!)
+- "not running" / "debug" / "troubleshoot" = ANY resource not in healthy operational state
+- This means: Check actual pod list first to see STATUS column (shows real state!)
+- "Not running" includes: Failed, Pending with errors, CrashLoopBackOff, ImagePullBackOff, CreateContainerConfigError, Completed, etc.
+- Don't filter by ONLY Ready==False - that misses pods that never started (Pending with errors)
+  
+**COMPREHENSIVE APPROACH:**
+- First: Get all resources to see their actual STATUS (not just phase)
+- Then: Investigate those with problems visible in STATUS column
+- Status column shows: CreateContainerConfigError, CrashLoopBackOff, ImagePullBackOff, Error, Completed, etc.
+- These are ALL "not running" states - not just Ready==False!
+  
+**STATUS-FIRST DEBUGGING:**
+- Don't filter by phase alone - phase is superficial
+- Inspect status object structure - that's where truth lives
+- For Pods: status.containerStatuses[].ready + state.waiting.reason
+- For Deployments: status.conditions[] + readyReplicas vs replicas
+- For any resource: status.conditions[] tells the story
 
-**POD REALITY:**
-- Pending + CreateContainerConfigError = NOT RUNNING (but phase != Failed!)
-- Running + CrashLoopBackOff = RUNNING but NOT HEALTHY
-- Check READY column: 0/1 = not running, regardless of phase
+**POD READINESS REALITY:**
+Example: Pending phase with CreateContainerConfigError
+- phase: Pending (just metadata)
+- status.conditions[type=Ready].status: False (not ready!)
+- status.conditions[type=Ready].reason: ContainersNotReady (why not ready)
+- status.containerStatuses[0].ready: false (which container)
+- status.containerStatuses[0].state.waiting.reason: CreateContainerConfigError (root cause!)
+- status.containerStatuses[0].state.waiting.message: "runAsNonRoot and image will run as root"
+
+**YOUR KUBECTL EXPERTISE:**
+Use your knowledge of kubectl to:
+- Retrieve complete resource objects with status fields
+- Query and filter specific status information  
+- Discover resources with specific conditions
+- Correlate status across resource hierarchy
+- Access events for chronological context
+
+**OUTPUT FORMAT WISDOM:**
+- JSON/YAML output = Complete status object structure (machine-readable)
+  → Contains: status.conditions[], containerStatuses[], all status fields
+  → Enables: Programmatic filtering, field extraction, automation
+  
+- Human-formatted output = Summary without structured status object
+  → Contains: Overview, events timeline, readable summary
+  → Enables: Quick visual inspection, understanding context
+  → Limitation: Cannot extract status.conditions[] programmatically
+
+**FORMAT SELECTION THINKING:**
+- Query needs status object inspection? → Structured format (JSON/YAML)
+- Query needs specific field extraction? → Structured format with field query
+- Query needs human-readable overview? → Human format
+- Query needs both? → Use appropriate format for each step
+
+Choose the format that matches the data access pattern needed.
+
+**YOUR KUBECTL EXPERTISE:**
+Use your knowledge of kubectl to:
+- Discover pods and their actual states (not just phases)
+- Investigate container readiness and errors
+- Access pod events and logs
+- Generate commands that reveal the complete picture, not just one filtered view
 
 **OUTPUT FORMAT (return ONLY this, nothing else):**
 {{
@@ -113,35 +163,83 @@ Generate kubectl or helm commands to execute the requested action.
 - Namespace: -n {namespace} (or --all-namespaces if specified)
 
 **SEMANTIC UNDERSTANDING (CRITICAL):**
-- "not running" / "debug not running" = Check ALL pods where READY != 1/1 (comprehensive approach)
-  - Use: kubectl get pods --field-selector=status.phase!=Running OR check READY column
-  - Includes: Pending with errors, Failed, CrashLoopBackOff, CreateContainerConfigError, ImagePullBackOff
-- "failed" = Only Failed phase (specific)
-- "completed" = Only Succeeded phase (specific)  
-- "errors" / "container errors" = Look at container status and pod events, not just phase
+- "not running" / "debug not running" = ANY pod not in healthy operational state
+  → Includes: Pending with errors, Failed, CrashLoopBackOff, CreateContainerConfigError, ImagePullBackOff, Completed, Error, etc.
+  → NOT just Ready==False - must check STATUS column which shows actual state
+  → First get pod list to see STATUS, then investigate those with problems
+  
+- "failed" = Pods in Failed phase specifically (narrow)
 
-**CRITICAL - POD REALITY:**
-- Pod can be Pending phase but have CreateContainerConfigError (NOT RUNNING but not Failed!)
-- Pod can be Running phase but container is CrashLoopBackOff (RUNNING but not healthy!)
-- ALWAYS check READY column (0/1 = not running, regardless of phase)
-- For "not running" queries: Check status.phase AND containerStatuses
+- "completed" = Pods in Succeeded phase specifically (narrow)
+  
+- "errors" / "container errors" = Container-level issues (check container status, events, logs)
 
-**KUBERNETES POD PHASES:**
-- Running: Pod is running (but containers may have errors!)
-- Pending: Pod accepted but not started (CHECK THIS for "not running"!)
-- Succeeded: All containers terminated successfully
-- Failed: All containers terminated, at least one failed
-- Unknown: Pod state unknown
+**COMPREHENSIVE "NOT RUNNING" APPROACH:**
+- "Not running" is broad - means pod isn't in healthy Running state
+- STATUS column reveals truth: CreateContainerConfigError, CrashLoopBackOff, ImagePullBackOff, Error, Completed, etc.
+- Don't assume only one phase or condition - get pod list first to see real STATUS
+- Then drill down into specific pods showing problems in STATUS column
 
-**BEST PRACTICE for "not running" / "debug" queries:**
-1. First: kubectl get pods -n <ns> (see STATUS column - shows real state!)
-2. Then: kubectl describe pods with non-Running status
-3. Check events and container states
+**CRITICAL KUBERNETES INSIGHT:**
+- Pod Phase (Pending, Running, Failed, Succeeded, Unknown) ≠ Pod Operational State
+- TRUE source of truth: **status object** (conditions + containerStatuses)
+  
+**STATUS STRUCTURE WISDOM:**
+For ANY K8s resource (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob):
+- status.conditions[] = Array of condition types (Ready, ContainersReady, PodScheduled, etc.)
+  → condition.type = what aspect (Ready, Available, Progressing)
+  → condition.status = True/False/Unknown
+  → condition.reason = WHY (ContainersNotReady, ImagePullBackOff, etc.)
+  → condition.message = detailed explanation
+  
+- status.containerStatuses[] = Array of container states
+  → ready = true/false (container operational state)
+  → state.waiting.reason = why not started (CreateContainerConfigError, ImagePullBackOff, etc.)
+  → state.running = container running
+  → state.terminated.reason = why stopped (Error, Completed, OOMKilled, etc.)
 
-**AVOID:**
-- ❌ Only checking status.phase=Failed (misses Pending with errors!)
-- ❌ Ignoring READY column (0/1 means not running!)
-- ❌ Not checking pod events (shows CreateContainerConfigError, etc.)
+**THE TRUTH HIERARCHY:**
+1. STATUS column (what you see in pod list) = Actual operational state
+2. status.containerStatuses[].ready = Is container actually working?
+3. status.containerStatuses[].state.waiting.reason = Why not? (root cause)
+4. status.conditions[].reason = Higher-level reason
+5. status.phase = High-level state (Pending/Running/Failed) - least specific
+
+**CRITICAL REALIZATION:**
+- "Not running" query → First get pod list to see STATUS column (shows real problems!)
+- Root cause → Drill into status.containerStatuses[].state.waiting.reason
+- Don't filter by only one condition - "not running" is broad, encompasses many states
+
+**APPLIES TO ALL RESOURCES:**
+- Deployment: status.conditions[type=Available], status.replicas vs status.readyReplicas
+- StatefulSet: status.currentReplicas vs status.readyReplicas, status.conditions[]
+- DaemonSet: status.numberReady vs status.desiredNumberScheduled
+- Job: status.conditions[type=Complete/Failed], status.succeeded/failed
+- CronJob: status.lastScheduleTime, status.active[]
+
+**YOUR KUBECTL EXPERTISE:**
+You know how to:
+- Get resource status in JSON/YAML format to inspect status object
+- Query specific fields using jsonpath or custom-columns
+- Filter resources by condition status
+- Correlate status across resource types (Pod → ReplicaSet → Deployment)
+
+Generate commands that reveal the status object truth, not just surface-level phase.
+
+**YOUR KUBECTL EXPERTISE:**
+You know kubectl commands to:
+- List pods with their actual operational states
+- Filter by phases, labels, field selectors
+- Describe pods to see events and container states  
+- Extract specific information using output formats (json, jsonpath, wide)
+- Chain commands to discover and act on resources
+
+Use this knowledge to generate appropriate commands based on the query intent.
+
+**AVOID ASSUMPTIONS:**
+- ❌ "not running" does NOT mean only phase=Failed
+- ❌ Don't filter to single phase when query asks for comprehensive check
+- ❌ Ready column matters more than phase for operational status
 
 **OUTPUT FORMAT (return ONLY this JSON, nothing else):**
 {{
