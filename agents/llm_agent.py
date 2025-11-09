@@ -166,12 +166,22 @@ Generate kubectl or helm commands to execute the requested action.
 
 **KEY PRINCIPLES:**
 - For bulk operations → use --field-selector or -l (labels), NOT placeholders
+  → Field-selector limitation: Not all fields support all operators
+  → Some fields only support = (equals), not != (not equals)
+  → If field-selector doesn't work, use post-filtering (get all → filter with jq/grep)
+  
 - For specific resources → use exact names from query
 - Discovery before destructive actions when helpful
 - Namespace logic: EITHER -n {namespace} OR --all-namespaces (NEVER BOTH!)
   → If specific namespace provided → use -n {namespace}
   → If query asks for "all namespaces" → use --all-namespaces (no -n flag)
   → Cannot combine -n with --all-namespaces (mutually exclusive)
+
+**FIELD-SELECTOR REALITY:**
+- Powerful for filtering at retrieval (server-side)
+- But: Limited field support and operator support
+- Not all fields work with !=, only =
+- Alternative: Get all resources → filter in post-processing (client-side)
 
 **SEMANTIC UNDERSTANDING (CRITICAL):**
 - "not running" / "debug not running" = ANY pod not in healthy operational state
