@@ -105,10 +105,16 @@ Use your knowledge of kubectl to:
   → Enables: Quick visual inspection, understanding context
   → Limitation: Cannot extract status.conditions[] programmatically
 
+- Name-only output formats:
+  → For deletion/modification: Use format that includes resource type
+  → Reason: kubectl delete needs resource type (pod/deployment/etc.), not just name
+  → Solution: Either specify resource type explicitly OR use output format that includes it
+
 **FORMAT SELECTION THINKING:**
 - Query needs status object inspection? → Structured format (JSON/YAML)
 - Query needs specific field extraction? → Structured format with field query
 - Query needs human-readable overview? → Human format
+- Query needs resource names for deletion? → Include resource type (pod/name-here OR format with type)
 - Query needs both? → Use appropriate format for each step
 
 Choose the format that matches the data access pattern needed.
@@ -372,7 +378,7 @@ Focus on practical, measurable improvements."""
             # Check if Ollama is available
             if not self._check_ollama_available():
                 raise AgentProcessingError(
-                    "Ollama LLM service is not available. This is a 100% AI-driven system. "
+                    "Ollama LLM service is not available. "
                     "Please start Ollama: 'ollama serve' and ensure model is available: 'ollama pull llama3.1:8b'"
                 )
             
