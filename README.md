@@ -10,7 +10,7 @@ K8sAgent is an AI-powered troubleshooting system that combines RAG (Retrieval-Au
 - **⚡ Automated Diagnostics**: Runs kubectl commands and system diagnostics
 - **🤖 AI-Powered Solutions**: Uses Llama 3.1 to generate step-by-step solutions
 - **📊 Pattern Recognition**: Recognizes common K8s issues (CrashLoopBackOff, ImagePullBackOff, OOMKilled, etc.)
-- **💻 Multiple Interfaces**: CLI, REST API, and ready for kAgent integration
+- **💻 Multiple Interfaces**: CLI, REST API (under qualification), and UI (yet to do)
 - **🔒 Safety First**: Command validation and execution restrictions
 
 ## ⚙️ How It Works
@@ -22,8 +22,8 @@ graph TB
     subgraph Platform["K8sAgent Platform"]
         subgraph Integration["Integration Layer"]
             CLI[Standalone CLI]
-            kAgent[kAgent Plugin]
-            API[REST API Interface]
+            UI[UI - Yet to do]
+            API[REST API - Under Qualification]
         end
         
         subgraph Orchestration["Core Orchestration Layer"]
@@ -41,7 +41,7 @@ graph TB
         end
         
         CLI --> Router
-        kAgent --> Router
+        UI --> Router
         API --> Router
         
         Formatter --> DocAgent
@@ -509,7 +509,8 @@ pip3 install -r requirements.txt
 
 ## 🚀 Future Enhancements
 
-- [ ] kAgent plugin integration
+- [ ] UI integration (yet to do)
+- [ ] REST API qualification (under qualification)
 - [ ] Semantic search with embeddings
 - [ ] Real-time monitoring dashboard
 - [ ] Multi-cluster support
