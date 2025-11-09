@@ -538,11 +538,134 @@ prompt = """
 
 ---
 
+### Issue #5: Universal Debugging Pattern for ALL K8s Resources
+**Date**: 2025-11-09  
+**Problem**: Debugging logic was hardcoded for specific resource types (pods, deployments)  
+**User Insight**: "for any resource type debugging. we can describe the resource and check for the events and pass only error details for analysis. or check for respective resource pods logs for error details"  
+**Breakthrough**: Universal pattern works for ALL K8s resources - no need for resource-specific logic!  
+
+**The Universal Debugging Pattern**:
+
+```yaml
+# Works for: pods, deployments, services, statefulsets, daemonsets, replicasets, 
+#            configmaps, secrets, ingress, persistentvolumeclaims, etc.
+
+Step 1: kubectl describe <resource-type> <name> -n <namespace>
+  ↓
+  Gets: Status, Conditions, Events (chronological error timeline)
+  
+Step 2 (if resource manages pods): Check pod logs
+  - Pod → kubectl logs <pod-name>
+  - Deployment/StatefulSet/DaemonSet/ReplicaSet → kubectl logs -l app=<name>
+  - Service → describe service → find endpoints → find pods → kubectl logs
+```
+
+**Why This Pattern is Universal**:
+1. **ALL K8s resources have Events** when something goes wrong
+2. **Events are chronological** - show what the system attempted
+3. **Events contain error messages** from controllers/schedulers/kubelet
+4. **Logs supplement Events** with application-level details
+5. **Pattern is identical** for ALL resource types
+
+**Example: Debugging Different Resources**:
+
+```bash
+# Debug Pod
+kubectl describe pod my-pod -n default     # → Events show why it failed
+kubectl logs my-pod -n default             # → Application errors
+
+# Debug Deployment
+kubectl describe deployment my-app -n default  # → Events show scaling/rollout issues
+kubectl logs -l app=my-app -n default --prefix # → Pod logs from deployment
+
+# Debug Service
+kubectl describe service my-svc -n default     # → Events show endpoint issues
+kubectl get endpoints my-svc -n default        # → Find backend pods
+kubectl logs <backend-pod> -n default          # → Check pod logs
+
+# Debug StatefulSet
+kubectl describe statefulset db -n default     # → Events show pod creation issues
+kubectl logs -l app=db -n default --prefix     # → Logs from stateful pods
+
+# Debug ConfigMap (yes, even ConfigMaps!)
+kubectl describe configmap app-config -n default  # → Events show mount failures
+```
+
+**Old Approach** (WRONG):
+```python
+# ❌ Resource-specific hardcoded logic
+if resource_type == 'pod':
+    run_describe_pod()
+    run_logs_pod()
+elif resource_type == 'deployment':
+    run_describe_deployment()
+    run_get_pods_from_deployment()
+elif resource_type == 'service':
+    # ... different logic
+# Each resource type needs custom code!
+```
+
+**AI-First Approach** (CORRECT):
+```python
+# ✅ Teach universal pattern in prompt
+prompt = """
+**UNIVERSAL DEBUGGING PATTERN (Works for ANY K8s Resource):**
+
+1. **Describe the Resource** → Get Events and Error Details
+   - kubectl describe <resource-type> <name> -n <namespace>
+   - Events section contains THE TRUTH: why it failed, what went wrong
+   - Works for: pods, deployments, services, statefulsets, daemonsets, etc.
+
+2. **Check Associated Pod Logs** (if resource manages pods)
+   - Resources that manage pods: deployments, statefulsets, daemonsets, replicasets
+   - Pattern: Resource → Pods → Logs
+
+3. **Filter Events for Errors Only**
+   - From describe output: look for type=Warning or type=Error
+   - Pass only error details for LLM analysis (not entire describe output)
+"""
+
+# ✅ Investigation agent auto-detects resource type, applies universal pattern
+def investigate_resource(resource_type, resource_name, namespace):
+    # Step 1: ALWAYS describe (works for ALL resources)
+    describe_output = kubectl_describe(resource_type, resource_name, namespace)
+    
+    # Step 2: If resource manages pods, get logs
+    if resource_type in ['deployment', 'statefulset', 'daemonset', 'replicaset']:
+        pod_logs = kubectl_logs_by_label(f"app={resource_name}", namespace)
+    elif resource_type == 'pod':
+        pod_logs = kubectl_logs(resource_name, namespace)
+    
+    # No resource-specific logic needed!
+```
+
+**Why AI-First Wins**:
+- **Single universal pattern** replaces infinite resource-specific code
+- **Auto-detects resource type** from kubectl output (no hardcoding)
+- **Scales to future K8s resources** (CRDs, new resource types)
+- **LLM understands Events** - can extract error details automatically
+- **No maintenance burden** when K8s adds new resources
+
+**Key Insight**: 
+- Events are the **universal debugging interface** in Kubernetes
+- ALL resources emit Events to explain state transitions and errors
+- One pattern to rule them all: `kubectl describe` → Events → Errors
+- Logs are supplementary (only for resources that manage pods)
+
+**Lesson**: 
+- Don't write resource-specific debugging logic
+- Teach ONE universal pattern that works for ALL resources
+- K8s already provides universal interface (Events) - use it!
+- Resource-agnostic code is more maintainable and scalable
+
+---
+
 ## Version History
 - v1.0 (2025-01-09): Initial AI-first guidelines
 - v1.1 (2025-01-09): Added Anti-Pattern #4 (Overly Aggressive Validation)
 - v1.2 (2025-01-09): Added Lessons Learned section with real examples
 - v1.3 (2025-01-09): Added Issue #3 (JSON parsing with unescaped quotes)
+- v1.4 (2025-11-09): Added Issue #5 (Universal debugging pattern for all K8s resources)
 - Reviewed by: AI Architecture Team
 - Status: **MANDATORY - NO EXCEPTIONS**
 
