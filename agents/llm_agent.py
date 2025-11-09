@@ -61,15 +61,17 @@ Analyze the query and generate appropriate kubectl or helm commands. Return ONLY
 
 **CRITICAL - "NOT RUNNING" QUERIES:**
 - "not running" / "debug" / "troubleshoot" = ANY resource not in healthy operational state
-- This means: Check actual pod list first to see STATUS column (shows real state!)
-- "Not running" includes: Failed, Pending with errors, CrashLoopBackOff, ImagePullBackOff, CreateContainerConfigError, Completed, etc.
-- Don't filter by ONLY Ready==False - that misses pods that never started (Pending with errors)
+- This means: Check actual resource list first to see STATUS column (shows real state!)
+- For Pods: "Not running" includes Failed, Pending with errors, CrashLoopBackOff, ImagePullBackOff, etc.
+- For Deployments: "Not working" = readyReplicas < desiredReplicas
+- For Services: "Not working" = endpoints not available
+- For ANY resource: Check status.conditions[] for problems
   
 **COMPREHENSIVE APPROACH:**
 - First: Get all resources to see their actual STATUS (not just phase)
 - Then: Investigate those with problems visible in STATUS column
-- Status column shows: CreateContainerConfigError, CrashLoopBackOff, ImagePullBackOff, Error, Completed, etc.
-- These are ALL "not running" states - not just Ready==False!
+- Apply UNIVERSAL DEBUGGING PATTERN: describe → check Events → check logs
+- Status column shows problems: CreateContainerConfigError, CrashLoopBackOff, ImagePullBackOff, etc.
   
 **STATUS-FIRST DEBUGGING:**
 - Don't filter by phase alone - phase is superficial
@@ -86,6 +88,40 @@ Example: Pending phase with CreateContainerConfigError
 - status.containerStatuses[0].ready: false (which container)
 - status.containerStatuses[0].state.waiting.reason: CreateContainerConfigError (root cause!)
 - status.containerStatuses[0].state.waiting.message: "runAsNonRoot and image will run as root"
+
+**UNIVERSAL DEBUGGING PATTERN (Works for ANY K8s Resource):**
+When debugging/troubleshooting ANY Kubernetes resource:
+
+1. **Describe the Resource** → Get Events and Error Details
+   - kubectl describe <resource-type> <name> -n <namespace>
+   - This shows: Status, Conditions, Events (errors/warnings chronologically)
+   - Events section contains THE TRUTH: why it failed, what went wrong
+   - Works for: pods, deployments, services, statefulsets, daemonsets, configmaps, secrets, etc.
+
+2. **Check Associated Pod Logs** (if resource manages pods)
+   - Deployments → find pods via label selector → kubectl logs
+   - Services → find endpoints → find pods → kubectl logs
+   - StatefulSets/DaemonSets → find pods directly → kubectl logs
+   - Pattern: Resource → Pods → Logs (for detailed error messages)
+
+3. **Filter Events for Errors Only** (pass only error details for analysis)
+   - From describe output: look for Events with type=Warning or type=Error
+   - Extract error messages from Events section
+   - These are the ACTUAL problems that need fixing
+
+**Why This Pattern is Universal:**
+- ALL K8s resources have Events when something goes wrong
+- Events are chronological and show what the system attempted
+- Events show error messages from controllers/schedulers/kubelet
+- Logs supplement Events with application-level details
+- This pattern works identically for ALL resource types
+
+**Examples of Universal Pattern:**
+- Debug Pod: describe pod → check Events → check logs
+- Debug Deployment: describe deployment → check Events → describe/logs of replica pods
+- Debug Service: describe service → check Events → describe endpoints → check backend pods
+- Debug StatefulSet: describe statefulset → check Events → describe/logs of managed pods
+- Debug ConfigMap: describe configmap → check Events (shows if mounting failed)
 
 **YOUR KUBECTL EXPERTISE:**
 Use your knowledge of kubectl to:
@@ -260,12 +296,40 @@ For ANY K8s resource (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob):
 - Job: status.conditions[type=Complete/Failed], status.succeeded/failed
 - CronJob: status.lastScheduleTime, status.active[]
 
+**UNIVERSAL DEBUGGING PATTERN (Works for ANY K8s Resource):**
+When debugging/troubleshooting ANY Kubernetes resource:
+
+1. **Describe the Resource** → Get Events and Error Details
+   - kubectl describe <resource-type> <name> -n <namespace>
+   - This shows: Status, Conditions, Events (errors/warnings chronologically)
+   - Events section contains THE TRUTH: why it failed, what went wrong
+   - Works for: pods, deployments, services, statefulsets, daemonsets, configmaps, secrets, etc.
+
+2. **Check Associated Pod Logs** (if resource manages pods)
+   - Deployments → find pods via label selector → kubectl logs
+   - Services → find endpoints → find pods → kubectl logs
+   - StatefulSets/DaemonSets → find pods directly → kubectl logs
+   - Pattern: Resource → Pods → Logs (for detailed error messages)
+
+3. **Filter Events for Errors Only** (pass only error details for analysis)
+   - From describe output: look for Events with type=Warning or type=Error
+   - Extract error messages from Events section
+   - These are the ACTUAL problems that need fixing
+
+**Why This Pattern is Universal:**
+- ALL K8s resources have Events when something goes wrong
+- Events are chronological and show what the system attempted
+- Events show error messages from controllers/schedulers/kubelet
+- Logs supplement Events with application-level details
+- This pattern works identically for ALL resource types
+
 **YOUR KUBECTL EXPERTISE:**
 You know how to:
 - Get resource status in JSON/YAML format to inspect status object
 - Query specific fields using jsonpath or custom-columns
 - Filter resources by condition status
 - Correlate status across resource types (Pod → ReplicaSet → Deployment)
+- Apply UNIVERSAL DEBUGGING PATTERN for any resource type
 
 Generate commands that reveal the status object truth, not just surface-level phase.
 

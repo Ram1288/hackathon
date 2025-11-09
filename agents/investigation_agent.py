@@ -359,23 +359,30 @@ Analyze the findings and determine:
             commands = []
             next_focus = analysis.get('next_focus', 'detailed diagnostics')
             
+            # UNIVERSAL DEBUGGING PATTERN: Apply describe → events → logs pattern to ANY resource
             for resource in discovered_resources[:2]:  # Limit to first 2 resources
-                resource_type = resource['type']  # 'pod', 'deployment', etc.
+                resource_type = resource['type']  # 'pod', 'deployment', 'service', 'statefulset', etc.
                 resource_name = resource['name']
                 
+                # Step 1: ALWAYS describe the resource (works for ALL K8s resources)
+                # This gets Events and error details universally
+                commands.append(f"kubectl describe {resource_type} {resource_name} -n {context['namespace']}")
+                
+                # Step 2: If resource manages pods, check pod logs
                 if resource_type == 'pod':
-                    commands.append(f"kubectl describe pod {resource_name} -n {context['namespace']}")
+                    # Direct pod: get logs
                     commands.append(f"kubectl logs {resource_name} -n {context['namespace']} --tail=50")
-                elif resource_type == 'deployment':
-                    commands.append(f"kubectl describe deployment {resource_name} -n {context['namespace']}")
-                    commands.append(f"kubectl get pods -n {context['namespace']} -l app={resource_name}")
+                elif resource_type in ['deployment', 'statefulset', 'daemonset', 'replicaset']:
+                    # Resources that manage pods: find their pods first, then logs
+                    # Get one representative pod's logs (enough for diagnosis)
+                    commands.append(f"kubectl logs -l app={resource_name} -n {context['namespace']} --tail=30 --prefix")
             
             return commands[:4]  # Max 4 detailed commands
     
     def _extract_resource_names_from_findings(self, findings: Dict) -> List[Dict]:
         """
         Parse kubectl output to extract actual resource names.
-        Looks for pod names, deployment names, etc. from previous commands.
+        UNIVERSAL: Works for ANY K8s resource type, not just pods/deployments.
         """
         resources = []
         
@@ -387,36 +394,52 @@ Analyze the findings and determine:
             if not stdout:
                 continue
             
-            # Parse 'kubectl get pods' output
-            if 'kubectl get pods' in cmd or 'kubectl get pod' in cmd:
-                lines = stdout.strip().split('\n')
-                if len(lines) > 1:  # Skip header
-                    for line in lines[1:]:
-                        parts = line.split()
-                        if parts:
-                            pod_name = parts[0]
-                            status = parts[2] if len(parts) > 2 else 'Unknown'
-                            
-                            # Only add non-running pods
-                            if status.lower() != 'running':
-                                resources.append({
-                                    'type': 'pod',
-                                    'name': pod_name,
-                                    'status': status
-                                })
+            # Universal pattern: 'kubectl get <resource-type>' → parse output
+            # Extract resource type from command
+            import re
+            get_match = re.search(r'kubectl get (\w+)', cmd)
+            if not get_match:
+                continue
             
-            # Parse 'kubectl get deployments' output
-            elif 'kubectl get deployment' in cmd:
-                lines = stdout.strip().split('\n')
-                if len(lines) > 1:
-                    for line in lines[1:]:
-                        parts = line.split()
-                        if parts:
-                            resources.append({
-                                'type': 'deployment',
-                                'name': parts[0],
-                                'status': parts[1] if len(parts) > 1 else 'Unknown'
-                            })
+            resource_type = get_match.group(1).lower()
+            # Normalize plural forms: pods → pod, deployments → deployment
+            resource_type_singular = resource_type.rstrip('s') if resource_type.endswith('s') else resource_type
+            
+            # Parse kubectl get output (standard format: NAME  READY  STATUS  ...)
+            lines = stdout.strip().split('\n')
+            if len(lines) <= 1:  # No data, just header
+                continue
+            
+            for line in lines[1:]:  # Skip header
+                parts = line.split()
+                if not parts:
+                    continue
+                
+                resource_name = parts[0]
+                # STATUS is typically column 2 or 3 depending on resource type
+                status = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else 'Unknown')
+                
+                # Add all resources with non-healthy status
+                # For pods: status != 'Running'
+                # For deployments: could check READY column (e.g., "0/1")
+                # For services: check endpoints availability
+                # Universal heuristic: if it doesn't look healthy, investigate
+                
+                if resource_type_singular == 'pod':
+                    # Only add non-running pods
+                    if status.lower() not in ['running', 'succeeded']:
+                        resources.append({
+                            'type': resource_type_singular,
+                            'name': resource_name,
+                            'status': status
+                        })
+                else:
+                    # For other resources, add all (LLM will decide what needs investigation)
+                    resources.append({
+                        'type': resource_type_singular,
+                        'name': resource_name,
+                        'status': status
+                    })
         
         return resources
     
