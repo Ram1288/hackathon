@@ -185,6 +185,11 @@ Generate kubectl or helm commands to execute the requested action.
 - Don't assume only one phase or condition - get pod list first to see real STATUS
 - Then drill down into specific pods showing problems in STATUS column
 
+**EFFICIENCY PRINCIPLE:**
+- If you filter at retrieval (field-selector), don't filter again in post-processing
+- Example: --field-selector gets non-Running pods → all results are already non-Running → no need to filter again
+- Avoid redundant operations (filter once, either at retrieval or post-processing, not both)
+
 **CRITICAL KUBERNETES INSIGHT:**
 - Pod Phase (Pending, Running, Failed, Succeeded, Unknown) ≠ Pod Operational State
 - TRUE source of truth: **status object** (conditions + containerStatuses)
